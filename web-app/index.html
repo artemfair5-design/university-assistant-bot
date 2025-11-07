@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Универ-Ассистент | Цифровой ВУЗ</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="container">
+                <div class="logo">
+                    <h1>🎓 Универ-Ассистент</h1>
+                    <p>Цифровой помощник студента</p>
+                </div>
+                <div class="user-info">
+                    <span id="userName">Студент</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="tabs">
+            <div class="container">
+                <button class="tab-button active" data-tab="schedule">📅 Расписание</button>
+                <button class="tab-button" data-tab="projects">📝 Проекты</button>
+                <button class="tab-button" data-tab="documents">🎓 Документы</button>
+                <button class="tab-button" data-tab="library">📚 Библиотека</button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main">
+            <div class="container">
+                <!-- Schedule Tab -->
+                <div id="schedule" class="tab-content active">
+                    <div class="card">
+                        <h2>Расписание занятий</h2>
+                        <div class="date-selector">
+                            <button class="date-btn active" data-date="today">Сегодня</button>
+                            <button class="date-btn" data-date="tomorrow">Завтра</button>
+                            <button class="date-btn" data-date="week">Неделя</button>
+                        </div>
+                        <div id="schedule-list" class="schedule-list">
+                            <!-- Schedule items will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Projects Tab -->
+                <div id="projects" class="tab-content">
+                    <div class="card">
+                        <h2>Проектная деятельность</h2>
+                        <div class="projects-grid" id="projects-list">
+                            <!-- Projects will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Documents Tab -->
+                <div id="documents" class="tab-content">
+                    <div class="card">
+                        <h2>Сервисы деканата</h2>
+                        <div class="services-grid">
+                            <div class="service-card" data-service="reference">
+                                <div class="service-icon">📄</div>
+                                <h3>Справка об обучении</h3>
+                                <p>Заказать официальную справку</p>
+                                <button class="btn-service">Заказать</button>
+                            </div>
+                            <div class="service-card" data-service="academic_leave">
+                                <div class="service-icon">📝</div>
+                                <h3>Академический отпуск</h3>
+                                <p>Подать заявление</p>
+                                <button class="btn-service">Подать</button>
+                            </div>
+                            <div class="service-card" data-service="transfer">
+                                <div class="service-icon">🔄</div>
+                                <h3>Перевод</h3>
+                                <p>Заявление на перевод</p>
+                                <button class="btn-service">Перевести</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Library Tab -->
+                <div id="library" class="tab-content">
+                    <div class="card">
+                        <h2>Электронная библиотека</h2>
+                        <div class="search-box">
+                            <input type="text" id="searchInput" placeholder="🔍 Поиск книг, учебников...">
+                            <button id="searchBtn">Найти</button>
+                        </div>
+                        <div class="library-stats">
+                            <div class="stat">
+                                <h3>125</h3>
+                                <p>доступных книг</p>
+                            </div>
+                            <div class="stat">
+                                <h3>15</h3>
+                                <p>электронных курсов</p>
+                            </div>
+                            <div class="stat">
+                                <h3>3</h3>
+                                <p>книги на руках</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="container">
+                <p>© 2024 Универ-Ассистент | Цифровой ВУЗ</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Modal -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3 id="modal-title">Заголовок</h3>
+            <p id="modal-text">Текст модального окна</p>
+            <button id="modal-confirm" class="btn-primary">Подтвердить</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
