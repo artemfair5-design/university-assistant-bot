@@ -26,4 +26,4 @@
 ## 🔗 Ссылки
 
 - [Чат-бот в MAX](https://max.ru/chat#botf9LHodD0cOJBJLYDixtV3RsHw4y35JeYVSFSTTalbyYsr6QB1T06ejZ0S_-Z2Ctnhvze3dV9OgzBzOzltVr6)
-- [Мини-приложение](https://YOUR_USERNAME.github.io/university-assistant-bot)
+- [Мини-приложение](https://artemfair5-design.github.io/university-assistant-bot)

@@ -1,0 +1,36 @@
+# docker-compose.yml
+version: '3.8' # Устаревшая версия, но пока работает. Для новых проектов используй '3.9' или '3.10'.
+
+services:
+  # Основной сервис бота
+  university-bot:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - MAX_TOKEN=${MAX_TOKEN} # Подставляется из .env или переменной окружения хоста
+      - MAX_API_URL=${MAX_API_URL:-https://api.max.ru}
+      # Строка подключения к БД. Указывает на сервис 'db' и использует его учетные данные.
+      - DATABASE_URL=postgresql://botuser:botpass@db:5432/university_bot
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    depends_on: # Убедимся, что БД запущена до бота
+      - db
+    # volumes: # Пока не используем, если не нужно монтировать код внутрь контейнера для hot-reload
+    #   - ./app.py:/app/app.py
+
+  # Сервис базы данных PostgreSQL
+  db:
+    image: postgres:13 # Используем версию 13, можно выбрать другую
+    environment:
+      POSTGRES_DB: university_bot
+      POSTGRES_USER: botuser
+      POSTGRES_PASSWORD: botpass
+    ports:
+      - "5432:5432" # Опционально: открывает порт БД на хосте для отладки
+    volumes:
+      - db_data:/var/lib/postgresql/data # Сохраняем данные БД в именованном томе Docker
+    restart: unless-stopped
+
+volumes:
+  db_data: # Определяем именованный том для хранения данных PostgreSQL
