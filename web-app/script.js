@@ -1,8 +1,9 @@
+// script.js
 // Конфигурация
-const CONFIG = {
-    API_BASE_URL: 'https://your-bot-name.onrender.com', // Замените на ваш Render URL
-    GITHUB_PAGES_URL: 'https://artemfair5-design.github.io/university-assistant-bot'
-};
+// const CONFIG = {
+//     API_BASE_URL: 'https://university-assistant-bot.onrender.com', // ← УДАЛИТЬ
+//     GITHUB_PAGES_URL: 'https://artemfair5-design.github.io/university-assistant-bot'
+// };
 
 // State приложения
 let state = {
@@ -15,6 +16,25 @@ let state = {
 // Инициализация приложения
 document.addEventListener('DOMContentLoaded', function() {
     initApp();
+});
+
+function fadeInApp() {
+    const appElement = document.getElementById('app');
+    // Убираем класс 'hidden' и добавляем 'visible', чтобы запустить анимацию
+    appElement.classList.remove('hidden');
+    appElement.classList.add('visible');
+}
+
+// Запускаем анимацию появления при полной загрузке DOM
+document.addEventListener('DOMContentLoaded', function() {
+    // Инициализация вкладок и других функций
+    initTabs();
+    loadSchedule();
+    loadProjects();
+    loadEvents();
+
+    // Запускаем анимацию появления
+    fadeInApp();
 });
 
 function initApp() {

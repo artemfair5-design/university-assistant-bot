@@ -1,3 +1,4 @@
+/* style.css */
 * {
     margin: 0;
     padding: 0;
@@ -343,4 +344,14 @@ body {
     .search-box {
         flex-direction: column;
     }
+}
+.app.hidden {
+    opacity: 0;
+    transform: translateY(20px); /* Начальное смещение вниз */
+    transition: opacity 0.5s ease-in-out, transform 0.5s ease-in-out;
+}
+
+.app.visible {
+    opacity: 1;
+    transform: translateY(0); /* Возврат к нормальному положению */
 }
