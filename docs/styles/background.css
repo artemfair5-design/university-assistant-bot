@@ -1,0 +1,47 @@
+:root {
+  --tg-theme-bg-color: #0a0a1a;
+  --tg-theme-text-color: #C4C7F2;
+  --primary: #1D97F1;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  width: 100vw;
+  font-family: 'Arimo', sans-serif;
+  background: none;
+  overflow: auto;
+}
+
+body {
+  color: var(--tg-theme-text-color);
+  position: relative;
+  overscroll-behavior: none;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: url('../background.jpg') 
+              no-repeat 
+              center center / cover 
+              fixed;
+  opacity: 0.9;
+  z-index: -1000;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #0a0a1a 0%, #0f1a42 100%);
+  z-index: -1001;
+}

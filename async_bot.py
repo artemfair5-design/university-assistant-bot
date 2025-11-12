@@ -1,4 +1,3 @@
-# async_bot.py
 import asyncio
 import logging
 import os
@@ -22,49 +21,99 @@ TOKEN = os.getenv('MAX_TOKEN', 'f9LHodD0cOJBJLYDixtV3RsHw4y35JeYVSFSTTalbyYsr6QB
 bot = Bot(TOKEN)
 dp = Dispatcher()
 
-# --- Текстовые шаблоны ---
-WELCOME_TEXT = """🎓 Добро пожаловать в Универ-Ассистент MAX!
+# --- Текстовые шаблоны (ОБНОВЛЕНЫ ДЛЯ MAX МОЗГ) ---
+WELCOME_TEXT = """🧠 Добро пожаловать в MAX Мозг!
 
-Для автоматической регистрации в мини-приложении просто нажмите кнопку ниже."""
+Умная платформа для студентов, абитуриентов и сотрудников университета."""
 
-HELP_TEXT = """🎓 Помощь Универ-Ассистент:
+ROLE_SELECTION_TEXT = """🎯 MAX Мозг
+
+Выберите вашу роль для персонализированного доступа:"""
+
+ROLE_APPROVED = """✅ Отлично! Теперь у вас есть доступ к MAX Мозг.
+
+Нажмите кнопку ниже, чтобы открыть интеллектуальную платформу."""
+
+ROLE_REJECTED = """⚠️ Для получения полного доступа к MAX Мозг необходимо подтверждение статуса.
+
+Обратитесь к администрации для верификации."""
+
+ADMIN_HELP = """👨‍💼 Админ-команды MAX Мозг:
+/status <user_id> - Статус пользователя
+/set_status <user_id> <status> - Установить статус
+/statistics - Статистика платформы
+/users - Список пользователей"""
+
+HELP_TEXT = """🧠 Помощь MAX Мозг:
 - отзыв: Оставить отзыв (напишите 'отзыв: ваш текст')
-- статистика: Показать статистику бота
-- мойпрофиль: Показать ваши данные"""
+- статистика: Статистика платформы
+- мойпрофиль: Ваш профиль
+- роли: Выбор роли для доступа"""
 
-# --- Универсальные функции ---
+# Список администраторов
+ADMIN_IDS = [71636492, 12217116]
+
+# Роли для нового мини-приложения
+MAX_ROLES = {
+    "абитуриент": "🎓 Абитуриент",
+    "студент": "👨‍🎓 Студент", 
+    "работник": "👨‍💼 Работник",
+    "администрация": "👑 Администрация",
+    "гость": "👤 Гость"
+}
+
+# --- Универсальные функции (ОБНОВЛЕНЫ) ---
 async def get_start_keyboard():
-    """Генерирует начальную клавиатуру с кнопкой Старт."""
+    """Генерирует начальную клавиатуру для MAX Мозг."""
     builder = InlineKeyboardBuilder()
-    builder.add(CallbackButton(text="🚀 Старт", payload="start"))
+    builder.add(CallbackButton(text="🧠 Начать работу с MAX", payload="start"))
     return builder.as_markup()
 
-async def get_main_menu_keyboard(event):
-    """Генерирует главное меню с inline-кнопками."""
+async def get_role_selection_keyboard():
+    """Генерирует клавиатуру выбора роли для MAX Мозг."""
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="🎓 Я абитуриент", payload="role_applicant"))
+    builder.row(CallbackButton(text="👨‍🎓 Я студент", payload="role_student"))
+    builder.row(CallbackButton(text="👨‍💼 Я сотрудник", payload="role_worker"))
+    builder.row(CallbackButton(text="👑 Администрация", payload="role_admin"))
+    builder.row(CallbackButton(text="👤 Гостевой доступ", payload="role_guest"))
+    return builder.as_markup()
+
+async def get_max_app_keyboard(event, user_role="гость"):
+    """Генерирует главное меню MAX Мозг с inline-кнопками."""
     builder = InlineKeyboardBuilder()
     
     try:
-        bot_me = event.bot.me
+        # ДЛЯ MAX: Добавляем случайный параметр для обхода кэша
+        import random
+        timestamp = int(datetime.now().timestamp())
+        random_param = random.randint(1000, 9999)
+        web_app_url = f"https://artemfair5-design.github.io/university-assistant-bot/auth.html?t={timestamp}&r={random_param}"
         
-        if bot_me:
-            web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/"
-            
-            builder.row(
-                OpenAppButton(
-                    text="📱 Открыть приложение",
-                    web_app=web_app_url,
-                    contact_id=bot_me.user_id
-                )
-            )
-            
-    except Exception as e:
-        logger.error(f"Ошибка создания OpenAppButton: {e}")
+        # В Max может быть другой способ создания кнопки
         builder.row(
-            CallbackButton(
-                text="📱 Открыть приложение (Fallback)",
-                payload="open_app_fallback"
+            OpenAppButton(
+                text="🧠 Открыть MAX Мозг",
+                web_app=web_app_url,
+                contact_id=event.bot.me.user_id if hasattr(event.bot, 'me') else 0
             )
         )
+            
+    except Exception as e:
+        logger.error(f"Ошибка создания OpenAppButton для Max: {e}")
+        # Fallback для Max
+        builder.row(
+            CallbackButton(
+                text="🧠 Открыть MAX Мозг",
+                payload="open_max_app"
+            )
+        )
+    
+    return builder.as_markup()
+    
+    # Дополнительные кнопки
+    builder.row(CallbackButton(text="🔄 Сменить роль", payload="change_role"))
+    builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     
     return builder.as_markup()
 
@@ -81,59 +130,149 @@ async def send_response(bot_instance, chat_id, text, keyboard=None):
         except Exception as fallback_e:
             logger.error(f"Fallback тоже не сработал: {fallback_e}")
 
-# --- Словарь обработчиков команд ---
-async def get_statistics_text():
-    """Генерирует текст статистики"""
-    try:
-        stats = await db.get_user_stats()
-        return f"""📊 Статистика бота:
-
-👥 Всего пользователей: {stats['total_users']}
-💬 Всего сообщений: {stats['total_messages']}
-⭐ Отзывов: {stats['total_feedback']}
-🔥 Активных за 7 дней: {stats['active_users_7d']}"""
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {e}")
-        return "❌ Не удалось получить статистику. Проверьте подключение к базе данных."
-
-COMMAND_HANDLERS = {
-    'помощь': lambda: HELP_TEXT,
-    'help': lambda: HELP_TEXT,
-    'статистика': get_statistics_text,
-}
-
-# --- Обработчики событий ---
+# --- Обработчики событий (ОБНОВЛЕНЫ) ---
 async def handle_start_response(event, response_text=None):
-    """Обрабатывает начальный ответ с кнопкой Старт."""
+    """Обрабатывает начальный ответ для MAX Мозг."""
     keyboard = await get_start_keyboard()
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
     if response_text is None:
-        response_text = "🎓 Добро пожаловать! Нажмите кнопку 'Старт' для начала работы."
+        response_text = "🧠 Добро пожаловать в MAX Мозг! Нажмите кнопку для начала работы."
     
     await send_response(event.bot, chat_id, response_text, keyboard)
 
-async def handle_common_response(event, response_text=None):
-    """Обрабатывает общий ответ с основной клавиатурой."""
-    keyboard = await get_main_menu_keyboard(event)
+async def handle_role_selection(event):
+    """Обрабатывает выбор роли для MAX Мозг."""
+    keyboard = await get_role_selection_keyboard()
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
-    if response_text is None:
-        response_text = WELCOME_TEXT
-    
-    await send_response(event.bot, chat_id, response_text, keyboard)
+    await send_response(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
 
+async def handle_role_approved(event, role_name):
+    """Обрабатывает подтверждение выбора роли."""
+    role_display = MAX_ROLES.get(role_name, "Пользователь")
+    keyboard = await get_max_app_keyboard(event, user_role=role_name)
+    
+    chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+    
+    approval_text = f"""✅ Роль {role_display} подтверждена!
+
+Теперь вы можете использовать все возможности MAX Мозг."""
+    
+    await send_response(event.bot, chat_id, approval_text, keyboard)
+
+async def handle_role_rejected(event):
+    """Обрабатывает ограниченный доступ."""
+    keyboard = await get_max_app_keyboard(event, user_role="гость")
+    
+    chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+    
+    await send_response(event.bot, chat_id, ROLE_REJECTED, keyboard)
+
+# --- Словарь обработчиков команд (ОБНОВЛЕН) ---
+async def get_statistics_text():
+    """Генерирует текст статистики для MAX Мозг"""
+    try:
+        stats = await db.get_user_stats()
+        status_text = "\n".join([f"  - {status}: {count}" for status, count in stats.get('status_stats', {}).items()])
+        
+        return f"""📊 Статистика MAX Мозг:
+
+👥 Всего пользователей: {stats['total_users']}
+💬 Сообщений в боте: {stats['total_messages']}
+⭐ Отзывов: {stats['total_feedback']}
+🔥 Активных за 7 дней: {stats['active_users_7d']}
+🎓 Пользователей с ролями: {stats.get('applicant_users', 0)}
+🧠 Доступов к платформе: {stats.get('mini_app_users', 0)}
+
+🏷️ Распределение по статусам:
+{status_text if status_text else '  - Нет данных'}"""
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики: {e}")
+        return "❌ Не удалось получить статистику."
+
+async def get_user_profile_text(user_id: int):
+    """Генерирует текст профиля пользователя для MAX Мозг"""
+    try:
+        user_info = await db.get_user_info(user_id)
+        if not user_info:
+            return "❌ Пользователь не найден"
+        
+        role_status = "✅ Подтверждена" if user_info['is_applicant'] else "⚠️ Требует подтверждения"
+        
+        return f"""🧠 Ваш профиль MAX Мозг:
+
+🆔 ID: {user_info['user_id']}
+👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''}
+📛 Юзернейм: @{user_info['username'] or 'Не указан'}
+🏷️ Статус: {user_info['user_status'] or 'Не установлен'}
+🎯 Роль: {role_status}
+🧠 Доступов к платформе: {user_info['mini_app_access_count'] or 0}
+📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')}
+💬 Сообщений: {user_info['message_count']}"""
+    except Exception as e:
+        logger.error(f"Ошибка получения профиля: {e}")
+        return "❌ Не удалось загрузить профиль"
+
+COMMAND_HANDLERS = {
+    'помощь': lambda: HELP_TEXT,
+    'help': lambda: HELP_TEXT,
+    'статистика': get_statistics_text,
+    'роли': lambda: "🔄 Нажмите на кнопку ниже, чтобы выбрать или сменить роль",
+    'max': lambda: "🧠 MAX Мозг - интеллектуальная платформа для университета",
+}
+
+# --- Админ-команды (ОБНОВЛЕНЫ) ---
+async def handle_admin_status(event, user_id: int):
+    """Обрабатывает команду статуса пользователя для администратора"""
+    if event.message.sender.user_id not in ADMIN_IDS:
+        return "❌ У вас нет прав администратора"
+    
+    user_info = await db.get_user_info(user_id)
+    if not user_info:
+        return f"❌ Пользователь с ID {user_id} не найден"
+    
+    role_status = "✅ Подтверждена" if user_info['is_applicant'] else "❌ Не подтверждена"
+    
+    return f"""🧠 Профиль пользователя {user_id}:
+
+👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''}
+📛 Юзернейм: @{user_info['username'] or 'Не указан'}
+🏷️ Статус: {user_info['user_status'] or 'Не установлен'}
+🎯 Роль: {role_status}
+🧠 Доступов к MAX Мозг: {user_info['mini_app_access_count'] or 0}
+📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')}
+💬 Сообщений: {user_info['message_count']}"""
+
+async def handle_set_status(event, user_id: int, new_status: str):
+    """Обрабатывает команду установки статуса пользователя"""
+    if event.message.sender.user_id not in ADMIN_IDS:
+        return "❌ У вас нет прав администратора"
+    
+    try:
+        await db.update_user_status(
+            user_id=user_id,
+            new_status=new_status,
+            changed_by=f"admin_{event.message.sender.user_id}",
+            reason=f"Установлен администратором {event.message.sender.user_id}"
+        )
+        return f"✅ Статус пользователя {user_id} успешно изменен на '{new_status}'"
+    except Exception as e:
+        logger.error(f"Ошибка установки статуса: {e}")
+        return f"❌ Не удалось установить статус: {e}"
+
+# --- Обработчики событий бота (ОБНОВЛЕНЫ) ---
 @dp.bot_started()
 async def bot_started(event: BotStarted):
-    logger.info(f"Бот запущен. Chat ID: {event.chat_id}")
+    logger.info(f"MAX Мозг бот запущен. Chat ID: {event.chat_id}")
     try:
         await db.save_user_data(event.user)
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя: {e}")
     
-    await handle_start_response(event, '🎓 Привет! Я Универ-Ассистент. Нажмите кнопку "Старт" для начала работы.')
+    await handle_start_response(event, '🧠 Привет! Я MAX Мозг - интеллектуальный ассистент. Нажмите кнопку для начала работы.')
 
 @dp.message_created(Command('start'))
 async def handle_start(event: MessageCreated):
@@ -166,13 +305,28 @@ async def handle_message(event: MessageCreated):
         feedback_text = text_lower.replace('отзыв:', '', 1).strip()
         if feedback_text:
             logger.info(f"Отзыв от user_id {user_id}: {feedback_text}")
-            await handle_common_response(event, "✅ Спасибо за ваш отзыв! Мы его обязательно рассмотрим.")
+            await handle_role_selection(event)
         else:
-            await handle_common_response(event, "❌ Пожалуйста, укажите текст отзыва после 'отзыв:'.")
+            await handle_role_selection(event)
+        return
+    
+    # Обработка команды "мойпрофиль"
+    if text_lower in ['мойпрофиль', 'профиль', 'profile', 'мой профиль']:
+        try:
+            profile_text = await get_user_profile_text(user_id)
+            await send_response(event.bot, event.message.recipient.chat_id, profile_text)
+        except Exception as e:
+            logger.error(f"Ошибка получения профиля: {e}")
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
+        return
+    
+    # Обработка команды выбора роли
+    if text_lower in ['роли', 'роль', 'roles', 'role', 'выбор роли']:
+        await handle_role_selection(event)
         return
     
     # Обработка основных команд
-    if any(cmd in text_lower for cmd in ['start', 'меню', 'начать']):
+    if any(cmd in text_lower for cmd in ['start', 'меню', 'начать', 'max', 'макс']):
         await handle_start_response(event)
         return
     
@@ -184,20 +338,73 @@ async def handle_message(event: MessageCreated):
                     response_text = await handler()
                 else:
                     response_text = handler()
-                await handle_common_response(event, response_text)
+                
+                # Для команды роли показываем клавиатуру выбора
+                if command in ['роли', 'roles']:
+                    await handle_role_selection(event)
+                else:
+                    await send_response(event.bot, event.message.recipient.chat_id, response_text)
                 return
             except Exception as e:
                 logger.error(f"Ошибка обработки команды {command}: {e}")
-                await handle_common_response(event, "❌ Произошла ошибка при выполнении команды.")
+                await handle_start_response(event)
                 return
     
     # Если команда не распознана, показываем начальный экран
-    await handle_start_response(event, "🤔 Не понял вашу команду. Нажмите кнопку 'Старт' для начала работы.")
+    await handle_start_response(event, "🤔 Не понял вашу команду. Нажмите кнопку для работы с MAX Мозг.")
 
-# --- Обработчик callback'ов для кнопок ---
+# --- Админ-команды обработчики ---
+@dp.message_created(Command('status'))
+async def handle_admin_status_command(event: MessageCreated):
+    """Обрабатывает команду /status для администраторов"""
+    try:
+        parts = event.message.body.text.split()
+        if len(parts) < 2:
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /status <user_id>")
+            return
+        
+        user_id = int(parts[1])
+        response = await handle_admin_status(event, user_id)
+        await send_response(event.bot, event.message.recipient.chat_id, response)
+        
+    except ValueError:
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+    except Exception as e:
+        logger.error(f"Ошибка обработки команды status: {e}")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+
+@dp.message_created(Command('set_status'))
+async def handle_set_status_command(event: MessageCreated):
+    """Обрабатывает команду /set_status для администраторов"""
+    try:
+        parts = event.message.body.text.split()
+        if len(parts) < 3:
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /set_status <user_id> <status>")
+            return
+        
+        user_id = int(parts[1])
+        new_status = ' '.join(parts[2:])
+        response = await handle_set_status(event, user_id, new_status)
+        await send_response(event.bot, event.message.recipient.chat_id, response)
+        
+    except ValueError:
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+    except Exception as e:
+        logger.error(f"Ошибка обработки команды set_status: {e}")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+
+@dp.message_created(Command('admin'))
+async def handle_admin_help(event: MessageCreated):
+    """Показывает справку по админ-командам"""
+    if event.message.sender.user_id in ADMIN_IDS:
+        await send_response(event.bot, event.message.recipient.chat_id, ADMIN_HELP)
+    else:
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+
+# --- Обработчик callback'ов для кнопок (ОБНОВЛЕН) ---
 @dp.message_callback()
 async def handle_callback(event: MessageCallback):
-    """Обрабатывает нажатия на inline-кнопки."""
+    """Обрабатывает нажатия на inline-кнопки для MAX Мозг."""
     user_id = event.callback.user.user_id
     payload = event.callback.payload
     
@@ -208,13 +415,65 @@ async def handle_callback(event: MessageCallback):
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя: {e}")
     
+    # Обработка начала работы
     if payload == "start":
-        await handle_common_response(event)
+        await handle_role_selection(event)
         return
     
-    if payload == "open_app_fallback":
-        web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/"
-        await send_response(event.bot, event.message.recipient.chat_id, f"📱 Открыть мини-приложение: {web_app_url}")
+    # Обработка выбора ролей
+    role_mapping = {
+        "role_applicant": "абитуриент",
+        "role_student": "студент", 
+        "role_worker": "работник",
+        "role_admin": "администрация",
+        "role_guest": "гость"
+    }
+    
+    if payload in role_mapping:
+        role_name = role_mapping[payload]
+        logger.info(f"Пользователь {user_id} выбрал роль: {role_name}")
+        
+        try:
+            # Сохраняем роль пользователя
+            await db.update_user_applicant_status(user_id, True)
+            
+            # Обновляем статус пользователя
+            await db.update_user_status(
+                user_id=user_id,
+                new_status=role_name,
+                changed_by="user_choice",
+                reason=f"Пользователь выбрал роль: {role_name}"
+            )
+            
+            # Логируем доступ к мини-приложению
+            await db.log_mini_app_access(user_id, {
+                'first_name': event.callback.user.first_name,
+                'last_name': event.callback.user.last_name,
+                'username': event.callback.user.username,
+                'selected_role': role_name
+            })
+        except Exception as e:
+            logger.error(f"Ошибка сохранения роли пользователя: {e}")
+        
+        await handle_role_approved(event, role_name)
+        return
+    
+    # Обработка смены роли
+    if payload == "change_role":
+        await handle_role_selection(event)
+        return
+    
+    # Обработка поддержки
+    if payload == "support":
+        await send_response(event.bot, event.message.recipient.chat_id, 
+                           "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
+        return
+    
+    # Обработка открытия приложения (fallback)
+    if payload == "open_max_app":
+        web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/auth.html"
+        await send_response(event.bot, event.message.recipient.chat_id, 
+                          f"🧠 Открыть MAX Мозг: {web_app_url}")
         return
 
 # --- Основная функция ---
@@ -237,7 +496,7 @@ async def main():
     
     try:
         stats = await db.get_user_stats()
-        logger.info(f"Статистика базы данных: {stats}")
+        logger.info(f"Статистика MAX Мозг: {stats}")
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
     
@@ -247,7 +506,7 @@ async def main():
     except Exception as e:
         logger.warning(f"Не удалось удалить вебхуки: {e}")
     
-    logger.info("Запуск бота с long polling...")
+    logger.info("Запуск бота MAX Мозг с long polling...")
     await dp.start_polling(bot)
 
 async def shutdown():
@@ -258,9 +517,9 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Бот остановлен по запросу пользователя")
+        logger.info("Бот MAX Мозг остановлен по запросу пользователя")
     except Exception as e:
-        logger.error(f"Ошибка при работе бота: {e}")
+        logger.error(f"Ошибка при работе бота MAX Мозг: {e}")
     finally:
         # Корректно закрываем соединения
         asyncio.run(shutdown())

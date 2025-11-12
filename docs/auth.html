@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>MAX — Выбор роли</title>
+  <link href="https://fonts.googleapis.com/css?family=Arimo|Hind:300" rel="stylesheet">
+  <link rel="stylesheet" href="styles/background.css">
+  <link rel="stylesheet" href="styles/auth.css">
+</head>
+<body>
+  <div class="auth-container">
+    <div class="logo">MAX <span>мозг</span></div>
+    
+    <h1 class="welcome-text">Выберите вашу роль</h1>
+    
+    <div class="roles-grid">
+      <div class="role-card" data-role="абитуриент">
+        <div class="role-icon">🎓</div>
+        <div class="role-title">Абитуриент</div>
+      </div>
+      
+      <div class="role-card" data-role="студент">
+        <div class="role-icon">👨‍🎓</div>
+        <div class="role-title">Студент</div>
+      </div>
+      
+      <div class="role-card" data-role="работник">
+        <div class="role-icon">👨‍💼</div>
+        <div class="role-title">Работник</div>
+      </div>
+      
+      <div class="role-card" data-role="администрация">
+        <div class="role-icon">👑</div>
+        <div class="role-title">Администрация</div>
+      </div>
+      
+      <div class="role-card" data-role="гость">
+        <div class="role-icon">👤</div>
+        <div class="role-title">Гость</div>
+      </div>
+    </div>
+    
+    <div class="guest-note">
+      Для гостей доступен ограниченный функционал
+    </div>
+  </div>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="scripts/auth.js"></script>
+</body>
+</html>
