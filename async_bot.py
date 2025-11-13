@@ -87,6 +87,9 @@ MAX_ROLES = {
 # Роли, требующие подтверждения администратора
 ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
 
+# Прямая ссылка на профиль в MAX
+MAX_PROFILE_URL = "https://max.ru/u/f9LHodD0cOKjtP4JqI_7NVijOYB4HbrU9UeT3xlr7m76Mmz7CEgQUmEQLzE"
+
 # --- Универсальные функции (ОБНОВЛЕНЫ) ---
 async def get_start_keyboard():
     """Генерирует начальную клавиатуру для MAX Мозг."""
@@ -170,6 +173,17 @@ async def send_temporary_message(bot_instance, chat_id, text):
         return await bot_instance.send_message(chat_id=chat_id, text=text)
     except Exception as e:
         logger.error(f"Ошибка отправки временного сообщения: {e}")
+
+async def send_keyboard_message(bot_instance, chat_id, text, keyboard):
+    """Отправляет сообщение с клавиатурой"""
+    try:
+        return await bot_instance.send_message(
+            chat_id=chat_id, 
+            text=text, 
+            attachments=[keyboard]
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения с клавиатурой: {e}")
 
 # --- Вспомогательные функции (НОВЫЕ) ---
 async def handle_role_pending_approval(event, role_name):
@@ -633,13 +647,41 @@ async def handle_callback(event: MessageCallback):
         await handle_role_selection(event)
         return
     
-    # Обработка поддержки
+    # Обработка поддержки (ОБНОВЛЕНО - ПЕРВЫЙ СПОСОБ)
     if payload == "support":
-        await send_temporary_message(event.bot, event.message.recipient.chat_id, 
-                           "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
-        # После поддержки показываем главное меню
+        # Создаем клавиатуру для поддержки
+        builder = InlineKeyboardBuilder()
+        
+        # Кнопка для открытия профиля в MAX
+        builder.row(
+            OpenAppButton(
+                text="👤 Связаться с Администратором",
+                web_app=MAX_PROFILE_URL
+            )
+        )
+        
+        # Кнопка для возврата в главное меню
+        builder.row(CallbackButton(text="↩️ Назад в меню", payload="back_to_menu"))
+        
+        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+        
+        support_text = """🧠 Поддержка MAX Мозг
+
+Для быстрой связи со мной нажмите кнопку ниже, чтобы открыть мой профиль в MAX.
+
+Там вы можете:
+• Написать мне сообщение
+• Посмотреть мои контакты
+• Узнать больше о разработке"""
+
+        await send_keyboard_message(event.bot, chat_id, support_text, builder.as_markup())
+        return
+    
+    # Обработка возврата в главное меню
+    if payload == "back_to_menu":
+        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         keyboard = await get_main_menu_keyboard(event)
-        await send_main_menu(event.bot, event.message.recipient.chat_id, "Чем еще могу помочь?", keyboard)
+        await send_keyboard_message(event.bot, chat_id, "Главное меню MAX Мозг:", keyboard)
         return
     
     # Обработка открытия приложения (fallback)
