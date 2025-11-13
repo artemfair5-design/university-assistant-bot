@@ -218,6 +218,31 @@ async def generate_qr_code(url):
         logger.error(f"Ошибка генерации QR-кода: {e}")
         return None
 
+async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
+    """Отправляет QR-код через MAX API"""
+    try:
+        # Загружаем файл через upload_file_buffer
+        upload_result = await bot_instance.upload_file_buffer(
+            file_buffer=qr_code_bytes.getvalue(),
+            filename="qr_code.png",
+            file_type="image/png"  # Указываем тип файла
+        )
+        
+        logger.info(f"Файл загружен: {upload_result}")
+        
+        # Отправляем сообщение с прикрепленным файлом
+        await bot_instance.send_message(
+            chat_id=chat_id,
+            text=caption,
+            attachments=[upload_result]  # Используем результат загрузки как вложение
+        )
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки QR-кода: {e}")
+        return False
+
 # --- Вспомогательные функции (НОВЫЕ) ---
 async def handle_role_pending_approval(event, role_name):
     """Обрабатывает ожидание подтверждения роли"""
@@ -680,7 +705,7 @@ async def handle_callback(event: MessageCallback):
         await handle_role_selection(event)
         return
     
-    # Обработка поддержки (ОБНОВЛЕНО - генерация QR-кода)
+    # Обработка поддержки (ОБНОВЛЕНО - отправка QR-кода)
     if payload == "support":
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         
@@ -689,26 +714,31 @@ async def handle_callback(event: MessageCallback):
         
         if qr_code:
             try:
-                # Отправляем QR-код как изображение
-                await event.bot.send_image(
-                    chat_id=chat_id,
-                    image=qr_code.getvalue(),
-                    caption="🧠 QR-код моего профиля в MAX\n\nОтсканируйте QR-код чтобы перейти в мой профиль и связаться со мной."
-                )
+                # Отправляем QR-код
+                success = await send_qr_code(event.bot, chat_id, qr_code, "🧠 QR-код для связи с администратором\n\nОтсканируйте код чтобы перейти в мой профиль MAX")
+                
+                if not success:
+                    # Fallback: если не удалось отправить QR-код
+                    await send_temporary_message(
+                        event.bot, 
+                        chat_id, 
+                        f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
+                    )
+                    
             except Exception as e:
                 logger.error(f"Ошибка отправки QR-кода: {e}")
-                # Если не удалось отправить QR-код, отправляем ссылку
+                # Fallback: отправляем ссылку
                 await send_temporary_message(
                     event.bot, 
                     chat_id, 
-                    f"👤 Вот ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}\n\nСкопируйте и откройте в приложении MAX."
+                    f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
                 )
         else:
-            # Если не удалось сгенерировать QR-код, отправляем ссылку
+            # Если не удалось сгенерировать QR-код
             await send_temporary_message(
                 event.bot, 
                 chat_id, 
-                f"👤 Вот ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}\n\nСкопируйте и откройте в приложении MAX."
+                f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
             )
         
         # Показываем главное меню
