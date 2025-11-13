@@ -87,7 +87,7 @@ MAX_ROLES = {
 # Роли, требующие подтверждения администратора
 ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
 
-# Кэш для управления сообщениями с кнопками - храним последнее сообщение для каждого чата
+# Кэш для управления сообщениями с кнопками
 last_messages = {}
 
 # --- Универсальные функции (ОБНОВЛЕНЫ) ---
@@ -146,30 +146,28 @@ async def get_max_app_keyboard(event, user_role="гость"):
     
     return builder.as_markup()
 
-async def send_or_edit_message(bot_instance, chat_id, text, keyboard=None):
-    """Универсальная функция отправки или редактирования сообщений."""
+async def send_clean_message(bot_instance, chat_id, text, keyboard=None):
+    """Удаляет предыдущее сообщение и отправляет новое с кнопками."""
     try:
-        # Если есть последнее сообщение в этом чате - редактируем его
+        # Удаляем предыдущее сообщение с кнопками
         if chat_id in last_messages:
-            message_id = last_messages[chat_id]
             try:
-                attachments = [keyboard] if keyboard else []
-                await bot_instance.edit_message(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=text,
-                    attachments=attachments
-                )
-                logger.info(f"Отредактировали сообщение {message_id} в чате {chat_id}")
-                return
-            except Exception as edit_error:
-                logger.warning(f"Не удалось отредактировать сообщение {message_id}: {edit_error}. Отправляем новое.")
-                # Если не удалось отредактировать, удаляем из кэша и отправляем новое
+                old_message_id = last_messages[chat_id]
+                await bot_instance.delete_message(chat_id, old_message_id)
+                logger.info(f"Удалили предыдущее сообщение {old_message_id} в чате {chat_id}")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить предыдущее сообщение: {e}")
+            finally:
+                # Очищаем запись независимо от результата
                 del last_messages[chat_id]
         
         # Отправляем новое сообщение
         attachments = [keyboard] if keyboard else []
-        sent_message = await bot_instance.send_message(chat_id=chat_id, text=text, attachments=attachments)
+        sent_message = await bot_instance.send_message(
+            chat_id=chat_id, 
+            text=text, 
+            attachments=attachments
+        )
         
         # Сохраняем ID нового сообщения
         if hasattr(sent_message, 'id'):
@@ -177,19 +175,19 @@ async def send_or_edit_message(bot_instance, chat_id, text, keyboard=None):
             logger.info(f"Сохранили новое сообщение {sent_message.id} для чата {chat_id}")
         
         logger.info(f"Сообщение отправлено в чат {chat_id}")
+        return sent_message
         
     except Exception as e:
-        logger.error(f"Ошибка отправки/редактирования: {e}")
+        logger.error(f"Ошибка отправки сообщения: {e}")
+        # Fallback без клавиатуры
         try:
-            # Fallback без клавиатуры
             sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
-            if hasattr(sent_message, 'id'):
-                last_messages[chat_id] = sent_message.id
+            return sent_message
         except Exception as fallback_e:
-            logger.error(f"Fallback тоже не сработал: {fallback_e}")
+            logger.error(f"Fallback отправка также не удалась: {fallback_e}")
 
 async def send_simple_message(bot_instance, chat_id, text):
-    """Простая отправка сообщения без управления историей (для уведомлений)"""
+    """Простая отправка сообщения без управления кнопками (для уведомлений)"""
     try:
         return await bot_instance.send_message(chat_id=chat_id, text=text)
     except Exception as e:
@@ -208,7 +206,7 @@ async def handle_role_pending_approval(event, role_name):
     builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     keyboard = builder.as_markup()
     
-    await send_or_edit_message(event.bot, chat_id, message, keyboard)
+    await send_clean_message(event.bot, chat_id, message, keyboard)
 
 async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
     """Уведомляет администраторов о необходимости подтверждения роли"""
@@ -238,7 +236,7 @@ async def handle_start_response(event, response_text=None):
     if response_text is None:
         response_text = "🧠 Добро пожаловать в MAX Мозг! Нажмите кнопку для начала работы."
     
-    await send_or_edit_message(event.bot, chat_id, response_text, keyboard)
+    await send_clean_message(event.bot, chat_id, response_text, keyboard)
 
 async def handle_role_selection(event):
     """Обрабатывает выбор роли для MAX Мозг с проверкой блокировки"""
@@ -254,13 +252,13 @@ async def handle_role_selection(event):
         keyboard = await get_max_app_keyboard(event, user_role=current_role)
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         message = ROLE_CHANGE_BLOCKED.format(role=MAX_ROLES.get(current_role, current_role))
-        await send_or_edit_message(event.bot, chat_id, message, keyboard)
+        await send_clean_message(event.bot, chat_id, message, keyboard)
         return
     
     # Показываем выбор роли
     keyboard = await get_role_selection_keyboard()
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-    await send_or_edit_message(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
+    await send_clean_message(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
 
 async def handle_role_approved(event, role_name):
     """Обрабатывает подтверждение выбора роли."""
@@ -277,7 +275,7 @@ async def handle_role_approved(event, role_name):
     builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     keyboard = builder.as_markup()
     
-    await send_or_edit_message(event.bot, chat_id, approval_text, keyboard)
+    await send_clean_message(event.bot, chat_id, approval_text, keyboard)
 
 async def handle_role_rejected(event):
     """Обрабатывает ограниченный доступ."""
@@ -288,7 +286,7 @@ async def handle_role_rejected(event):
     builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     keyboard = builder.as_markup()
     
-    await send_or_edit_message(event.bot, chat_id, ROLE_REJECTED, keyboard)
+    await send_clean_message(event.bot, chat_id, ROLE_REJECTED, keyboard)
 
 # --- Словарь обработчиков команд (ОБНОВЛЕН) ---
 async def get_statistics_text():
@@ -549,7 +547,7 @@ async def handle_approve_role_command(event: MessageCreated):
                 builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
                 keyboard = builder.as_markup()
                 
-                await send_or_edit_message(
+                await send_clean_message(
                     event.bot, 
                     user_id,
                     f"✅ Ваша роль *{role_display}* подтверждена!\n\nТеперь вам доступен полный функционал MAX Мозг.",
