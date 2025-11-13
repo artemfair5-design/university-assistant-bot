@@ -87,9 +87,6 @@ MAX_ROLES = {
 # Роли, требующие подтверждения администратора
 ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
 
-# Кэш для управления сообщениями с кнопками
-last_messages = {}
-
 # --- Универсальные функции (ОБНОВЛЕНЫ) ---
 async def get_start_keyboard():
     """Генерирует начальную клавиатуру для MAX Мозг."""
@@ -107,7 +104,7 @@ async def get_role_selection_keyboard():
     builder.row(CallbackButton(text="👤 Гостевой доступ", payload="role_guest"))
     return builder.as_markup()
 
-async def get_max_app_keyboard(event, user_role="гость"):
+async def get_main_menu_keyboard(event, user_role="гость"):
     """Генерирует главное меню MAX Мозг с проверкой доступа"""
     user_id = event.callback.user.user_id if hasattr(event, 'callback') else event.message.sender.user_id
     
@@ -118,7 +115,7 @@ async def get_max_app_keyboard(event, user_role="гость"):
     
     builder = InlineKeyboardBuilder()
     
-    # Кнопка мини-приложения ВСЕГДА доступна, даже для неподтвержденных ролей
+    # Кнопка мини-приложения ВСЕГДА доступна
     try:
         import random
         timestamp = int(datetime.now().timestamp())
@@ -137,61 +134,41 @@ async def get_max_app_keyboard(event, user_role="гость"):
         logger.error(f"Ошибка создания OpenAppButton для Max: {e}")
         builder.row(CallbackButton(text="🧠 Открыть MAX Мозг", payload="open_max_app"))
     
-    # Если роль не подтверждена и требует подтверждения - показываем статус
+    # Дополнительные кнопки в зависимости от статуса
     if not is_approved and current_role in ROLES_REQUIRING_APPROVAL:
-        builder.row(CallbackButton(text="⏳ Ожидание подтверждения", payload="pending_approval"))
+        builder.row(CallbackButton(text="⏳ Статус подтверждения", payload="pending_approval"))
     
-    # Кнопка поддержки ВСЕГДА отображается
+    # Всегда показываем кнопки для основных действий
+    builder.row(CallbackButton(text="🔄 Сменить роль", payload="change_role"))
+    builder.row(CallbackButton(text="👤 Мой профиль", payload="my_profile"))
     builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     
     return builder.as_markup()
 
-async def send_clean_message(bot_instance, chat_id, text, keyboard=None):
-    """Удаляет предыдущее сообщение и отправляет новое с кнопками."""
+async def send_main_menu(bot_instance, chat_id, text, keyboard=None):
+    """Отправляет основное меню - всегда одно сообщение с кнопками"""
     try:
-        # Удаляем предыдущее сообщение с кнопками
-        if chat_id in last_messages:
-            try:
-                old_message_id = last_messages[chat_id]
-                await bot_instance.delete_message(chat_id, old_message_id)
-                logger.info(f"Удалили предыдущее сообщение {old_message_id} в чате {chat_id}")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить предыдущее сообщение: {e}")
-            finally:
-                # Очищаем запись независимо от результата
-                del last_messages[chat_id]
-        
-        # Отправляем новое сообщение
         attachments = [keyboard] if keyboard else []
         sent_message = await bot_instance.send_message(
             chat_id=chat_id, 
             text=text, 
             attachments=attachments
         )
-        
-        # Сохраняем ID нового сообщения
-        if hasattr(sent_message, 'id'):
-            last_messages[chat_id] = sent_message.id
-            logger.info(f"Сохранили новое сообщение {sent_message.id} для чата {chat_id}")
-        
-        logger.info(f"Сообщение отправлено в чат {chat_id}")
+        logger.info(f"Главное меню отправлено в чат {chat_id}")
         return sent_message
-        
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения: {e}")
-        # Fallback без клавиатуры
+        logger.error(f"Ошибка отправки главного меню: {e}")
         try:
-            sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
-            return sent_message
+            return await bot_instance.send_message(chat_id=chat_id, text=text)
         except Exception as fallback_e:
-            logger.error(f"Fallback отправка также не удалась: {fallback_e}")
+            logger.error(f"Fallback тоже не сработал: {fallback_e}")
 
-async def send_simple_message(bot_instance, chat_id, text):
-    """Простая отправка сообщения без управления кнопками (для уведомлений)"""
+async def send_temporary_message(bot_instance, chat_id, text):
+    """Отправляет временное сообщение (исчезает после следующего действия)"""
     try:
         return await bot_instance.send_message(chat_id=chat_id, text=text)
     except Exception as e:
-        logger.error(f"Ошибка простой отправки: {e}")
+        logger.error(f"Ошибка отправки временного сообщения: {e}")
 
 # --- Вспомогательные функции (НОВЫЕ) ---
 async def handle_role_pending_approval(event, role_name):
@@ -201,12 +178,9 @@ async def handle_role_pending_approval(event, role_name):
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     message = ROLE_APPROVAL_PENDING.format(role=role_display)
     
-    # После выбора роли показываем только кнопку поддержки
-    builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
-    keyboard = builder.as_markup()
-    
-    await send_clean_message(event.bot, chat_id, message, keyboard)
+    # Показываем главное меню с информацией о статусе
+    keyboard = await get_main_menu_keyboard(event, role_name)
+    await send_main_menu(event.bot, chat_id, message, keyboard)
 
 async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
     """Уведомляет администраторов о необходимости подтверждения роли"""
@@ -222,7 +196,7 @@ async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
     
     for admin_id in ADMIN_IDS:
         try:
-            await send_simple_message(event.bot, admin_id, message)
+            await send_temporary_message(event.bot, admin_id, message)
         except Exception as e:
             logger.warning(f"Не удалось уведомить администратора {admin_id}: {e}")
 
@@ -236,7 +210,7 @@ async def handle_start_response(event, response_text=None):
     if response_text is None:
         response_text = "🧠 Добро пожаловать в MAX Мозг! Нажмите кнопку для начала работы."
     
-    await send_clean_message(event.bot, chat_id, response_text, keyboard)
+    await send_main_menu(event.bot, chat_id, response_text, keyboard)
 
 async def handle_role_selection(event):
     """Обрабатывает выбор роли для MAX Мозг с проверкой блокировки"""
@@ -249,16 +223,16 @@ async def handle_role_selection(event):
     
     if current_role and current_role != 'гость' and not can_change:
         # Пользователь не может менять роль
-        keyboard = await get_max_app_keyboard(event, user_role=current_role)
+        keyboard = await get_main_menu_keyboard(event, user_role=current_role)
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         message = ROLE_CHANGE_BLOCKED.format(role=MAX_ROLES.get(current_role, current_role))
-        await send_clean_message(event.bot, chat_id, message, keyboard)
+        await send_main_menu(event.bot, chat_id, message, keyboard)
         return
     
     # Показываем выбор роли
     keyboard = await get_role_selection_keyboard()
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-    await send_clean_message(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
+    await send_main_menu(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
 
 async def handle_role_approved(event, role_name):
     """Обрабатывает подтверждение выбора роли."""
@@ -270,23 +244,17 @@ async def handle_role_approved(event, role_name):
 
 Теперь вы можете использовать все возможности MAX Мозг."""
     
-    # После подтверждения роли показываем только кнопку поддержки
-    builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
-    keyboard = builder.as_markup()
-    
-    await send_clean_message(event.bot, chat_id, approval_text, keyboard)
+    # Показываем главное меню
+    keyboard = await get_main_menu_keyboard(event, role_name)
+    await send_main_menu(event.bot, chat_id, approval_text, keyboard)
 
 async def handle_role_rejected(event):
     """Обрабатывает ограниченный доступ."""
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
-    # Показываем только кнопку поддержки
-    builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
-    keyboard = builder.as_markup()
-    
-    await send_clean_message(event.bot, chat_id, ROLE_REJECTED, keyboard)
+    # Показываем главное меню
+    keyboard = await get_main_menu_keyboard(event, user_role="гость")
+    await send_main_menu(event.bot, chat_id, ROLE_REJECTED, keyboard)
 
 # --- Словарь обработчиков команд (ОБНОВЛЕН) ---
 async def get_statistics_text():
@@ -432,17 +400,23 @@ async def handle_message(event: MessageCreated):
         feedback_text = text_lower.replace('отзыв:', '', 1).strip()
         if feedback_text:
             logger.info(f"Отзыв от user_id {user_id}: {feedback_text}")
-        await handle_role_selection(event)
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "✅ Спасибо за ваш отзыв!")
+        # После отзыва показываем главное меню
+        keyboard = await get_main_menu_keyboard(event)
+        await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
         return
     
     # Обработка команды "мойпрофиль"
     if text_lower in ['мойпрофиль', 'профиль', 'profile', 'мой профиль']:
         try:
             profile_text = await get_user_profile_text(user_id)
-            await send_simple_message(event.bot, event.message.recipient.chat_id, profile_text)
+            # Показываем профиль как временное сообщение, затем главное меню
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, profile_text)
+            keyboard = await get_main_menu_keyboard(event)
+            await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
         except Exception as e:
             logger.error(f"Ошибка получения профиля: {e}")
-            await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
         return
     
     # Обработка команды выбора роли
@@ -468,7 +442,10 @@ async def handle_message(event: MessageCreated):
                 if command in ['роли', 'roles']:
                     await handle_role_selection(event)
                 else:
-                    await send_simple_message(event.bot, event.message.recipient.chat_id, response_text)
+                    # Для других команд показываем временное сообщение и главное меню
+                    await send_temporary_message(event.bot, event.message.recipient.chat_id, response_text)
+                    keyboard = await get_main_menu_keyboard(event)
+                    await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
                 return
             except Exception as e:
                 logger.error(f"Ошибка обработки команды {command}: {e}")
@@ -485,18 +462,18 @@ async def handle_admin_status_command(event: MessageCreated):
     try:
         parts = event.message.body.text.split()
         if len(parts) < 2:
-            await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Использование: /status <user_id>")
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Использование: /status <user_id>")
             return
         
         user_id = int(parts[1])
         response = await handle_admin_status(event, user_id)
-        await send_simple_message(event.bot, event.message.recipient.chat_id, response)
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, response)
         
     except ValueError:
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
     except Exception as e:
         logger.error(f"Ошибка обработки команды status: {e}")
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
 
 @dp.message_created(Command('set_status'))
 async def handle_set_status_command(event: MessageCreated):
@@ -504,31 +481,31 @@ async def handle_set_status_command(event: MessageCreated):
     try:
         parts = event.message.body.text.split()
         if len(parts) < 3:
-            await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Использование: /set_status <user_id> <status>")
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Использование: /set_status <user_id> <status>")
             return
         
         user_id = int(parts[1])
         new_status = ' '.join(parts[2:])
         response = await handle_set_status(event, user_id, new_status)
-        await send_simple_message(event.bot, event.message.recipient.chat_id, response)
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, response)
         
     except ValueError:
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
     except Exception as e:
         logger.error(f"Ошибка обработки команды set_status: {e}")
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
 
 @dp.message_created(Command('approve_role'))
 async def handle_approve_role_command(event: MessageCreated):
     """Обрабатывает команду подтверждения роли пользователя"""
     if event.message.sender.user_id not in ADMIN_IDS:
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
         return
     
     try:
         parts = event.message.body.text.split()
         if len(parts) < 2:
-            await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Использование: /approve_role <user_id>")
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Использование: /approve_role <user_id>")
             return
         
         user_id = int(parts[1])
@@ -542,12 +519,8 @@ async def handle_approve_role_command(event: MessageCreated):
             # Уведомляем пользователя
             try:
                 role_display = MAX_ROLES.get(user_info.get('selected_role', 'пользователь'), 'Пользователь')
-                # После подтверждения роли показываем только кнопку поддержки
-                builder = InlineKeyboardBuilder()
-                builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
-                keyboard = builder.as_markup()
-                
-                await send_clean_message(
+                keyboard = await get_main_menu_keyboard(event, user_info.get('selected_role'))
+                await send_main_menu(
                     event.bot, 
                     user_id,
                     f"✅ Ваша роль *{role_display}* подтверждена!\n\nТеперь вам доступен полный функционал MAX Мозг.",
@@ -556,25 +529,25 @@ async def handle_approve_role_command(event: MessageCreated):
             except Exception as e:
                 logger.warning(f"Не удалось уведомить пользователя {user_id}: {e}")
         
-        await send_simple_message(
+        await send_temporary_message(
             event.bot, 
             event.message.recipient.chat_id,
             f"✅ Роль пользователя {user_id} успешно подтверждена!"
         )
         
     except ValueError:
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
     except Exception as e:
         logger.error(f"Ошибка подтверждения роли: {e}")
-        await send_simple_message(event.bot, event.message.recipient.chat_id, f"❌ Ошибка при подтверждении роли: {e}")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, f"❌ Ошибка при подтверждении роли: {e}")
 
 @dp.message_created(Command('admin'))
 async def handle_admin_help(event: MessageCreated):
     """Показывает справку по админ-командам"""
     if event.message.sender.user_id in ADMIN_IDS:
-        await send_simple_message(event.bot, event.message.recipient.chat_id, ADMIN_HELP)
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, ADMIN_HELP)
     else:
-        await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
 
 # --- Обработчик callback'ов для кнопок (ОБНОВЛЕН) ---
 @dp.message_callback()
@@ -643,7 +616,7 @@ async def handle_callback(event: MessageCallback):
                 
         except Exception as e:
             logger.error(f"Ошибка сохранения роли пользователя: {e}")
-            await send_simple_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выборе роли")
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выборе роли")
         return
     
     # Обработка смены роли
@@ -651,16 +624,32 @@ async def handle_callback(event: MessageCallback):
         await handle_role_selection(event)
         return
     
+    # Обработка профиля
+    if payload == "my_profile":
+        try:
+            profile_text = await get_user_profile_text(user_id)
+            # Показываем профиль как временное сообщение, затем главное меню
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, profile_text)
+            keyboard = await get_main_menu_keyboard(event)
+            await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+        except Exception as e:
+            logger.error(f"Ошибка получения профиля: {e}")
+            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
+        return
+    
     # Обработка поддержки
     if payload == "support":
-        await send_simple_message(event.bot, event.message.recipient.chat_id, 
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, 
                            "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
+        # После поддержки показываем главное меню
+        keyboard = await get_main_menu_keyboard(event)
+        await send_main_menu(event.bot, event.message.recipient.chat_id, "Чем еще могу помочь?", keyboard)
         return
     
     # Обработка открытия приложения (fallback)
     if payload == "open_max_app":
         web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/auth.html"
-        await send_simple_message(event.bot, event.message.recipient.chat_id, 
+        await send_temporary_message(event.bot, event.message.recipient.chat_id, 
                           f"🧠 Открыть MAX Мозг: {web_app_url}")
         return
     
