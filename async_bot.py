@@ -185,6 +185,39 @@ async def send_keyboard_message(bot_instance, chat_id, text, keyboard):
     except Exception as e:
         logger.error(f"Ошибка отправки сообщения с клавиатурой: {e}")
 
+# --- Функция для генерации QR-кода ---
+async def generate_qr_code(url):
+    """Генерирует QR-код для указанной ссылки"""
+    try:
+        import qrcode
+        from io import BytesIO
+        
+        # Создаем QR-код
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(url)
+        qr.make(fit=True)
+        
+        # Создаем изображение
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Сохраняем в bytes
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return img_bytes
+    except ImportError:
+        logger.error("Библиотека qrcode не установлена. Установите: pip install qrcode[pil]")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка генерации QR-кода: {e}")
+        return None
+
 # --- Вспомогательные функции (НОВЫЕ) ---
 async def handle_role_pending_approval(event, role_name):
     """Обрабатывает ожидание подтверждения роли"""
@@ -647,33 +680,40 @@ async def handle_callback(event: MessageCallback):
         await handle_role_selection(event)
         return
     
-    # Обработка поддержки (ОБНОВЛЕНО - OpenAppButton с прямой ссылкой)
+    # Обработка поддержки (ОБНОВЛЕНО - генерация QR-кода)
     if payload == "support":
-        builder = InlineKeyboardBuilder()
-        
-        # Кнопка для открытия профиля администратора в MAX
-        builder.row(
-            OpenAppButton(
-                text="👤 Связаться с Администратором",
-                web_app=MAX_PROFILE_URL
-            )
-        )
-        
-        # Кнопка для возврата в главное меню
-        builder.row(CallbackButton(text="↩️ Назад в меню", payload="back_to_menu"))
-        
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         
-        support_text = """🧠 Поддержка MAX Мозг
-
-Для быстрой связи со мной нажмите кнопку ниже, чтобы открыть мой профиль в MAX.
-
-Там вы можете:
-• Написать мне сообщение
-• Посмотреть мои контакты
-• Узнать больше о разработке"""
-
-        await send_keyboard_message(event.bot, chat_id, support_text, builder.as_markup())
+        # Генерируем QR-код
+        qr_code = await generate_qr_code(MAX_PROFILE_URL)
+        
+        if qr_code:
+            try:
+                # Отправляем QR-код как изображение
+                await event.bot.send_image(
+                    chat_id=chat_id,
+                    image=qr_code.getvalue(),
+                    caption="🧠 QR-код моего профиля в MAX\n\nОтсканируйте QR-код чтобы перейти в мой профиль и связаться со мной."
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки QR-кода: {e}")
+                # Если не удалось отправить QR-код, отправляем ссылку
+                await send_temporary_message(
+                    event.bot, 
+                    chat_id, 
+                    f"👤 Вот ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}\n\nСкопируйте и откройте в приложении MAX."
+                )
+        else:
+            # Если не удалось сгенерировать QR-код, отправляем ссылку
+            await send_temporary_message(
+                event.bot, 
+                chat_id, 
+                f"👤 Вот ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}\n\nСкопируйте и откройте в приложении MAX."
+            )
+        
+        # Показываем главное меню
+        keyboard = await get_main_menu_keyboard(event)
+        await send_main_menu(event.bot, chat_id, "Чем еще могу помочь?", keyboard)
         return
     
     # Обработка возврата в главное меню
