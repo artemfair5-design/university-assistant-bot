@@ -101,7 +101,12 @@ class Database:
             ('user_status', 'TEXT DEFAULT %s' % "'student'"),
             ('last_mini_app_access', 'TIMESTAMP WITH TIME ZONE'),
             ('mini_app_access_count', 'INTEGER DEFAULT 0'),
-            ('selected_role', 'TEXT')  # НОВАЯ КОЛОНКА: выбранная роль в MAX Мозг
+            ('selected_role', 'TEXT'),
+            # НОВЫЕ КОЛОНКИ ДЛЯ СИСТЕМЫ РОЛЕЙ
+            ('role_approved', 'BOOLEAN DEFAULT FALSE'),
+            ('role_change_allowed', 'BOOLEAN DEFAULT TRUE'),
+            ('role_selected_at', 'TIMESTAMP WITH TIME ZONE'),
+            ('admin_verified', 'BOOLEAN DEFAULT FALSE')
         ]
         
         for column_name, column_type in columns_to_add:
@@ -121,7 +126,8 @@ class Database:
             ('idx_feedback_user_id', 'feedback(user_id)'),
             ('idx_activity_user_id', 'user_activity(user_id)'),
             ('idx_status_history_user_id', 'user_status_history(user_id)'),
-            ('idx_users_selected_role', 'users(selected_role)')  # НОВЫЙ ИНДЕКС
+            ('idx_users_selected_role', 'users(selected_role)'),
+            ('idx_users_role_approved', 'users(role_approved)')
         ]
         
         # Индексы для новых колонок (могут не существовать сначала)
@@ -218,6 +224,108 @@ class Database:
                     INSERT INTO feedback (user_id, feedback_text)
                     VALUES ($1, $2)
                 ''', user_id, feedback_text)
+
+    async def update_user_role(self, user_id: int, role_name: str, allow_change: bool = True):
+        """Обновляет роль пользователя с настройками блокировки"""
+        async with self.pool.acquire() as conn:
+            try:
+                current_time = datetime.now()
+                
+                # Для гостевой роли всегда разрешаем смену, для остальных - по настройке
+                is_guest = role_name == 'гость'
+                final_allow_change = allow_change if not is_guest else True
+                
+                await conn.execute('''
+                    UPDATE users 
+                    SET selected_role = $1, 
+                        role_change_allowed = $2,
+                        role_selected_at = $3,
+                        role_approved = $4,
+                        admin_verified = $4,
+                        updated_at = NOW()
+                    WHERE user_id = $5
+                ''', role_name, final_allow_change, current_time, is_guest, user_id)
+                
+                logger.info(f"Роль пользователя {user_id} обновлена: {role_name}, смена разрешена: {final_allow_change}")
+                
+            except Exception as e:
+                logger.error(f"Ошибка обновления роли пользователя: {e}")
+                raise
+
+    async def approve_user_role(self, user_id: int, approved_by: str = 'admin'):
+        """Подтверждает роль пользователя администратором"""
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    UPDATE users 
+                    SET role_approved = TRUE,
+                        admin_verified = TRUE,
+                        updated_at = NOW()
+                    WHERE user_id = $1
+                ''', user_id)
+                
+                # Логируем в историю статусов
+                await conn.execute('''
+                    INSERT INTO user_status_history (user_id, old_status, new_status, changed_by, reason)
+                    VALUES ($1, $2, $3, $4, $5)
+                ''', user_id, 'pending', 'approved', approved_by, 'Роль подтверждена администратором')
+                
+                logger.info(f"Роль пользователя {user_id} подтверждена администратором")
+                
+            except Exception as e:
+                logger.error(f"Ошибка подтверждения роли: {e}")
+                raise
+
+    async def can_change_role(self, user_id: int) -> bool:
+        """Проверяет, может ли пользователь сменить роль"""
+        async with self.pool.acquire() as conn:
+            try:
+                result = await conn.fetchval('''
+                    SELECT role_change_allowed FROM users WHERE user_id = $1
+                ''', user_id)
+                return bool(result) if result is not None else True
+            except Exception as e:
+                logger.warning(f"Ошибка проверки возможности смены роли: {e}")
+                return True
+
+    async def is_role_approved(self, user_id: int) -> bool:
+        """Проверяет, подтверждена ли роль пользователя"""
+        async with self.pool.acquire() as conn:
+            try:
+                # Для гостевой роли всегда считаем подтвержденной
+                result = await conn.fetchrow('''
+                    SELECT selected_role, role_approved FROM users WHERE user_id = $1
+                ''', user_id)
+                
+                if not result:
+                    return False
+                    
+                # Если роль гость - автоматически подтверждена
+                if result['selected_role'] == 'гость':
+                    return True
+                    
+                return bool(result['role_approved'])
+            except Exception as e:
+                logger.warning(f"Ошибка проверки подтверждения роли: {e}")
+                return False
+
+    async def get_user_role_info(self, user_id: int) -> Dict[str, Any]:
+        """Получает полную информацию о роли пользователя"""
+        async with self.pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow('''
+                    SELECT selected_role, role_approved, role_change_allowed, 
+                           role_selected_at, admin_verified, user_status
+                    FROM users 
+                    WHERE user_id = $1
+                ''', user_id)
+                
+                if row:
+                    return dict(row)
+                return {}
+            except Exception as e:
+                logger.warning(f"Ошибка получения информации о роли: {e}")
+                return {}
 
     async def log_mini_app_access(self, user_id: int, user_data: Dict[str, Any] = None):
         """Логирует доступ пользователя к мини-приложению MAX Мозг"""
@@ -317,7 +425,8 @@ class Database:
                 row = await conn.fetchrow('''
                     SELECT user_id, first_name, last_name, username, user_status, 
                            is_applicant, selected_role, mini_app_access_count, 
-                           last_mini_app_access, registration_date, message_count
+                           last_mini_app_access, registration_date, message_count,
+                           role_approved, role_change_allowed, admin_verified
                     FROM users 
                     WHERE user_id = $1
                 ''', user_id)
@@ -340,6 +449,7 @@ class Database:
                 # Пытаемся получить дополнительные статистики
                 applicant_users = 0
                 mini_app_users = 0
+                approved_users = 0
                 status_stats = {}
                 role_stats = {}
                 
@@ -350,6 +460,11 @@ class Database:
                 
                 try:
                     mini_app_users = await conn.fetchval('SELECT COUNT(*) FROM users WHERE mini_app_access_count > 0')
+                except Exception:
+                    pass
+                
+                try:
+                    approved_users = await conn.fetchval('SELECT COUNT(*) FROM users WHERE role_approved = TRUE')
                 except Exception:
                     pass
                 
@@ -388,6 +503,7 @@ class Database:
                     'active_users_7d': active_users,
                     'applicant_users': applicant_users,
                     'mini_app_users': mini_app_users,
+                    'approved_users': approved_users,
                     'status_stats': status_stats,
                     'role_stats': role_stats
                 }
@@ -400,6 +516,7 @@ class Database:
                     'active_users_7d': 0,
                     'applicant_users': 0,
                     'mini_app_users': 0,
+                    'approved_users': 0,
                     'status_stats': {},
                     'role_stats': {}
                 }

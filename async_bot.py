@@ -34,13 +34,35 @@ ROLE_APPROVED = """✅ Отлично! Теперь у вас есть дост�
 
 Нажмите кнопку ниже, чтобы открыть интеллектуальную платформу."""
 
+ROLE_APPROVAL_PENDING = """⏳ Ваша роль *{role}* отправлена на подтверждение администратору.
+
+Доступ к MAX Мозг будет открыт после подтверждения вашего статуса.
+
+Ожидайте уведомления!"""
+
 ROLE_REJECTED = """⚠️ Для получения полного доступа к MAX Мозг необходимо подтверждение статуса.
 
 Обратитесь к администрации для верификации."""
 
+ROLE_CHANGE_BLOCKED = """🚫 *Смена роли невозможна*
+
+Вы уже выбрали роль *{role}* и не можете её изменить.
+
+Если вам нужна другая роль, обратитесь к администратору."""
+
+ADMIN_ROLE_APPROVAL_NOTIFICATION = """👨‍💼 *Требуется подтверждение роли*
+
+Пользователь *{user_name}* (@{username}) выбрал роль *{role}*.
+
+ID пользователя: `{user_id}`
+
+Для подтверждения используйте:
+`/approve_role {user_id}`"""
+
 ADMIN_HELP = """👨‍💼 Админ-команды MAX Мозг:
 /status <user_id> - Статус пользователя
 /set_status <user_id> <status> - Установить статус
+/approve_role <user_id> - Подтвердить роль пользователя
 /statistics - Статистика платформы
 /users - Список пользователей"""
 
@@ -62,6 +84,9 @@ MAX_ROLES = {
     "гость": "👤 Гость"
 }
 
+# Роли, требующие подтверждения администратора
+ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
+
 # --- Универсальные функции (ОБНОВЛЕНЫ) ---
 async def get_start_keyboard():
     """Генерирует начальную клавиатуру для MAX Мозг."""
@@ -80,8 +105,21 @@ async def get_role_selection_keyboard():
     return builder.as_markup()
 
 async def get_max_app_keyboard(event, user_role="гость"):
-    """Генерирует главное меню MAX Мозг с inline-кнопками."""
+    """Генерирует главное меню MAX Мозг с проверкой доступа"""
+    user_id = event.callback.user.user_id if hasattr(event, 'callback') else event.message.sender.user_id
+    
+    # Проверяем подтверждена ли роль
+    is_approved = await db.is_role_approved(user_id)
+    role_info = await db.get_user_role_info(user_id)
+    current_role = role_info.get('selected_role', 'гость')
+    
     builder = InlineKeyboardBuilder()
+    
+    # Если роль не подтверждена и требует подтверждения - показываем сообщение
+    if not is_approved and current_role in ROLES_REQUIRING_APPROVAL:
+        builder.row(CallbackButton(text="⏳ Ожидание подтверждения", payload="pending_approval"))
+        builder.row(CallbackButton(text="📞 Связаться с администратором", payload="contact_admin"))
+        return builder.as_markup()
     
     try:
         # ДЛЯ MAX: Добавляем случайный параметр для обхода кэша
@@ -90,7 +128,6 @@ async def get_max_app_keyboard(event, user_role="гость"):
         random_param = random.randint(1000, 9999)
         web_app_url = f"https://artemfair5-design.github.io/university-assistant-bot/auth.html?t={timestamp}&r={random_param}"
         
-        # В Max может быть другой способ создания кнопки
         builder.row(
             OpenAppButton(
                 text="🧠 Открыть MAX Мозг",
@@ -109,10 +146,10 @@ async def get_max_app_keyboard(event, user_role="гость"):
             )
         )
     
-    return builder.as_markup()
+    # Кнопка смены роли только если разрешено
+    if await db.can_change_role(user_id):
+        builder.row(CallbackButton(text="🔄 Сменить роль", payload="change_role"))
     
-    # Дополнительные кнопки
-    builder.row(CallbackButton(text="🔄 Сменить роль", payload="change_role"))
     builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     
     return builder.as_markup()
@@ -130,6 +167,36 @@ async def send_response(bot_instance, chat_id, text, keyboard=None):
         except Exception as fallback_e:
             logger.error(f"Fallback тоже не сработал: {fallback_e}")
 
+# --- Вспомогательные функции (НОВЫЕ) ---
+async def handle_role_pending_approval(event, role_name):
+    """Обрабатывает ожидание подтверждения роли"""
+    role_display = MAX_ROLES.get(role_name, "Пользователь")
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(CallbackButton(text="📞 Связаться с администратором", payload="contact_admin"))
+    
+    chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+    message = ROLE_APPROVAL_PENDING.format(role=role_display)
+    
+    await send_response(event.bot, chat_id, message, keyboard)
+
+async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
+    """Уведомляет администраторов о необходимости подтверждения роли"""
+    user = event.callback.user
+    role_display = MAX_ROLES.get(role_name, role_name)
+    
+    message = ADMIN_ROLE_APPROVAL_NOTIFICATION.format(
+        user_name=f"{user.first_name or ''} {user.last_name or ''}".strip(),
+        username=user.username or 'нет username',
+        role=role_display,
+        user_id=user_id
+    )
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await send_response(event.bot, admin_id, message)
+        except Exception as e:
+            logger.warning(f"Не удалось уведомить администратора {admin_id}: {e}")
+
 # --- Обработчики событий (ОБНОВЛЕНЫ) ---
 async def handle_start_response(event, response_text=None):
     """Обрабатывает начальный ответ для MAX Мозг."""
@@ -143,11 +210,25 @@ async def handle_start_response(event, response_text=None):
     await send_response(event.bot, chat_id, response_text, keyboard)
 
 async def handle_role_selection(event):
-    """Обрабатывает выбор роли для MAX Мозг."""
+    """Обрабатывает выбор роли для MAX Мозг с проверкой блокировки"""
+    user_id = event.callback.user.user_id if hasattr(event, 'callback') else event.message.sender.user_id
+    
+    # Проверяем, может ли пользователь менять роль
+    can_change = await db.can_change_role(user_id)
+    current_role_info = await db.get_user_role_info(user_id)
+    current_role = current_role_info.get('selected_role')
+    
+    if current_role and current_role != 'гость' and not can_change:
+        # Пользователь не может менять роль
+        keyboard = await get_max_app_keyboard(event, user_role=current_role)
+        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+        message = ROLE_CHANGE_BLOCKED.format(role=MAX_ROLES.get(current_role, current_role))
+        await send_response(event.bot, chat_id, message, keyboard)
+        return
+    
+    # Показываем выбор роли
     keyboard = await get_role_selection_keyboard()
-    
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-    
     await send_response(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
 
 async def handle_role_approved(event, role_name):
@@ -177,6 +258,7 @@ async def get_statistics_text():
     try:
         stats = await db.get_user_stats()
         status_text = "\n".join([f"  - {status}: {count}" for status, count in stats.get('status_stats', {}).items()])
+        role_text = "\n".join([f"  - {role}: {count}" for role, count in stats.get('role_stats', {}).items()])
         
         return f"""📊 Статистика MAX Мозг:
 
@@ -184,11 +266,14 @@ async def get_statistics_text():
 💬 Сообщений в боте: {stats['total_messages']}
 ⭐ Отзывов: {stats['total_feedback']}
 🔥 Активных за 7 дней: {stats['active_users_7d']}
-🎓 Пользователей с ролями: {stats.get('applicant_users', 0)}
+✅ Подтвержденных ролей: {stats.get('approved_users', 0)}
 🧠 Доступов к платформе: {stats.get('mini_app_users', 0)}
 
 🏷️ Распределение по статусам:
-{status_text if status_text else '  - Нет данных'}"""
+{status_text if status_text else '  - Нет данных'}
+
+🎯 Распределение по ролям:
+{role_text if role_text else '  - Нет данных'}"""
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
         return "❌ Не удалось получить статистику."
@@ -200,15 +285,18 @@ async def get_user_profile_text(user_id: int):
         if not user_info:
             return "❌ Пользователь не найден"
         
-        role_status = "✅ Подтверждена" if user_info['is_applicant'] else "⚠️ Требует подтверждения"
+        role_display = MAX_ROLES.get(user_info.get('selected_role', 'гость'), 'Гость')
+        role_status = "✅ Подтверждена" if user_info.get('role_approved') else "⏳ Ожидает подтверждения"
+        can_change = "✅ Да" if user_info.get('role_change_allowed', True) else "❌ Нет"
         
         return f"""🧠 Ваш профиль MAX Мозг:
 
 🆔 ID: {user_info['user_id']}
 👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''}
 📛 Юзернейм: @{user_info['username'] or 'Не указан'}
-🏷️ Статус: {user_info['user_status'] or 'Не установлен'}
-🎯 Роль: {role_status}
+🎯 Роль: {role_display}
+✅ Статус роли: {role_status}
+🔄 Можно сменить роль: {can_change}
 🧠 Доступов к платформе: {user_info['mini_app_access_count'] or 0}
 📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')}
 💬 Сообщений: {user_info['message_count']}"""
@@ -234,14 +322,17 @@ async def handle_admin_status(event, user_id: int):
     if not user_info:
         return f"❌ Пользователь с ID {user_id} не найден"
     
-    role_status = "✅ Подтверждена" if user_info['is_applicant'] else "❌ Не подтверждена"
+    role_display = MAX_ROLES.get(user_info.get('selected_role', 'гость'), 'Гость')
+    role_status = "✅ Подтверждена" if user_info.get('role_approved') else "❌ Не подтверждена"
+    can_change = "✅ Да" if user_info.get('role_change_allowed', True) else "❌ Нет"
     
     return f"""🧠 Профиль пользователя {user_id}:
 
 👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''}
 📛 Юзернейм: @{user_info['username'] or 'Не указан'}
-🏷️ Статус: {user_info['user_status'] or 'Не установлен'}
-🎯 Роль: {role_status}
+🎯 Роль: {role_display}
+✅ Статус роли: {role_status}
+🔄 Можно сменить роль: {can_change}
 🧠 Доступов к MAX Мозг: {user_info['mini_app_access_count'] or 0}
 📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')}
 💬 Сообщений: {user_info['message_count']}"""
@@ -393,6 +484,50 @@ async def handle_set_status_command(event: MessageCreated):
         logger.error(f"Ошибка обработки команды set_status: {e}")
         await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
 
+@dp.message_created(Command('approve_role'))
+async def handle_approve_role_command(event: MessageCreated):
+    """Обрабатывает команду подтверждения роли пользователя"""
+    if event.message.sender.user_id not in ADMIN_IDS:
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        return
+    
+    try:
+        parts = event.message.body.text.split()
+        if len(parts) < 2:
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /approve_role <user_id>")
+            return
+        
+        user_id = int(parts[1])
+        
+        # Подтверждаем роль пользователя
+        await db.approve_user_role(user_id, f"admin_{event.message.sender.user_id}")
+        
+        # Получаем информацию о пользователе для уведомления
+        user_info = await db.get_user_info(user_id)
+        if user_info:
+            # Уведомляем пользователя
+            try:
+                role_display = MAX_ROLES.get(user_info.get('selected_role', 'пользователь'), 'Пользователь')
+                await send_response(
+                    event.bot, 
+                    user_id,
+                    f"✅ Ваша роль *{role_display}* подтверждена!\n\nТеперь вам доступен полный функционал MAX Мозг."
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось уведомить пользователя {user_id}: {e}")
+        
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id,
+            f"✅ Роль пользователя {user_id} успешно подтверждена!"
+        )
+        
+    except ValueError:
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+    except Exception as e:
+        logger.error(f"Ошибка подтверждения роли: {e}")
+        await send_response(event.bot, event.message.recipient.chat_id, f"❌ Ошибка при подтверждении роли: {e}")
+
 @dp.message_created(Command('admin'))
 async def handle_admin_help(event: MessageCreated):
     """Показывает справку по админ-командам"""
@@ -434,8 +569,11 @@ async def handle_callback(event: MessageCallback):
         logger.info(f"Пользователь {user_id} выбрал роль: {role_name}")
         
         try:
-            # Сохраняем роль пользователя
-            await db.update_user_applicant_status(user_id, True)
+            # Определяем, разрешена ли смена роли (для не-гостевых ролей блокируем смену)
+            allow_role_change = role_name == 'гость'
+            
+            # Сохраняем роль с настройками блокировки
+            await db.update_user_role(user_id, role_name, allow_role_change)
             
             # Обновляем статус пользователя
             await db.update_user_status(
@@ -452,10 +590,20 @@ async def handle_callback(event: MessageCallback):
                 'username': event.callback.user.username,
                 'selected_role': role_name
             })
+            
+            # Если роль требует подтверждения
+            if role_name in ROLES_REQUIRING_APPROVAL:
+                # Уведомляем администраторов
+                await notify_admins_about_pending_role(event, user_id, role_name)
+                # Показываем пользователю сообщение о ожидании подтверждения
+                await handle_role_pending_approval(event, role_name)
+            else:
+                # Для гостевой роли сразу даем доступ
+                await handle_role_approved(event, role_name)
+                
         except Exception as e:
             logger.error(f"Ошибка сохранения роли пользователя: {e}")
-        
-        await handle_role_approved(event, role_name)
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выборе роли")
         return
     
     # Обработка смены роли
@@ -474,6 +622,19 @@ async def handle_callback(event: MessageCallback):
         web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/auth.html"
         await send_response(event.bot, event.message.recipient.chat_id, 
                           f"🧠 Открыть MAX Мозг: {web_app_url}")
+        return
+    
+    # Обработка ожидания подтверждения
+    if payload == "pending_approval":
+        user_info = await db.get_user_info(user_id)
+        current_role = user_info.get('selected_role', 'гость')
+        await handle_role_pending_approval(event, current_role)
+        return
+    
+    # Обработка связи с администратором
+    if payload == "contact_admin":
+        await send_response(event.bot, event.message.recipient.chat_id, 
+                           "📞 Для связи с администратором:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
         return
 
 # --- Основная функция ---
