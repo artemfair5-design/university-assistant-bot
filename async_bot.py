@@ -154,9 +154,20 @@ async def get_max_app_keyboard(event, user_role="гость"):
     
     return builder.as_markup()
 
-async def send_response(bot_instance, chat_id, text, keyboard=None):
-    """Универсальная функция отправки сообщений."""
+async def send_response(bot_instance, chat_id, text, keyboard=None, delete_previous_message_id=None):
+    """Универсальная функция отправки сообщений с возможностью удаления предыдущего."""
     try:
+        # Если нужно удалить предыдущее сообщение
+        if delete_previous_message_id:
+            try:
+                await bot_instance.delete_message(
+                    chat_id=chat_id,
+                    message_id=delete_previous_message_id
+                )
+                logger.info(f"Удалено предыдущее сообщение {delete_previous_message_id} в чате {chat_id}")
+            except Exception as delete_error:
+                logger.warning(f"Не удалось удалить предыдущее сообщение: {delete_error}")
+        
         attachments = [keyboard] if keyboard else []
         await bot_instance.send_message(chat_id=chat_id, text=text, attachments=attachments)
         logger.info(f"Сообщение отправлено в чат {chat_id}")
@@ -175,9 +186,16 @@ async def handle_role_pending_approval(event, role_name):
     keyboard.row(CallbackButton(text="📞 Связаться с администратором", payload="contact_admin"))
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+    
     message = ROLE_APPROVAL_PENDING.format(role=role_display)
     
-    await send_response(event.bot, chat_id, message, keyboard)
+    await send_response(
+        event.bot, 
+        chat_id, 
+        message, 
+        keyboard,
+        delete_previous_message_id=event.message.id if hasattr(event, 'message') else None
+    )
 
 async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
     """Уведомляет администраторов о необходимости подтверждения роли"""
@@ -207,7 +225,13 @@ async def handle_start_response(event, response_text=None):
     if response_text is None:
         response_text = "🧠 Добро пожаловать в MAX Мозг! Нажмите кнопку для начала работы."
     
-    await send_response(event.bot, chat_id, response_text, keyboard)
+    await send_response(
+        event.bot, 
+        chat_id, 
+        response_text, 
+        keyboard,
+        delete_previous_message_id=event.message.id if hasattr(event, 'message') else None
+    )
 
 async def handle_role_selection(event):
     """Обрабатывает выбор роли для MAX Мозг с проверкой блокировки"""
@@ -223,13 +247,25 @@ async def handle_role_selection(event):
         keyboard = await get_max_app_keyboard(event, user_role=current_role)
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         message = ROLE_CHANGE_BLOCKED.format(role=MAX_ROLES.get(current_role, current_role))
-        await send_response(event.bot, chat_id, message, keyboard)
+        await send_response(
+            event.bot, 
+            chat_id, 
+            message, 
+            keyboard,
+            delete_previous_message_id=event.message.id if hasattr(event, 'message') else None
+        )
         return
     
     # Показываем выбор роли
     keyboard = await get_role_selection_keyboard()
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-    await send_response(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
+    await send_response(
+        event.bot, 
+        chat_id, 
+        ROLE_SELECTION_TEXT, 
+        keyboard,
+        delete_previous_message_id=event.message.id if hasattr(event, 'message') else None
+    )
 
 async def handle_role_approved(event, role_name):
     """Обрабатывает подтверждение выбора роли."""
@@ -242,7 +278,13 @@ async def handle_role_approved(event, role_name):
 
 Теперь вы можете использовать все возможности MAX Мозг."""
     
-    await send_response(event.bot, chat_id, approval_text, keyboard)
+    await send_response(
+        event.bot, 
+        chat_id, 
+        approval_text, 
+        keyboard,
+        delete_previous_message_id=event.message.id if hasattr(event, 'message') else None
+    )
 
 async def handle_role_rejected(event):
     """Обрабатывает ограниченный доступ."""
@@ -250,7 +292,13 @@ async def handle_role_rejected(event):
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
-    await send_response(event.bot, chat_id, ROLE_REJECTED, keyboard)
+    await send_response(
+        event.bot, 
+        chat_id, 
+        ROLE_REJECTED, 
+        keyboard,
+        delete_previous_message_id=event.message.id if hasattr(event, 'message') else None
+    )
 
 # --- Словарь обработчиков команд (ОБНОВЛЕН) ---
 async def get_statistics_text():
@@ -347,7 +395,7 @@ async def handle_set_status(event, user_id: int, new_status: str):
             user_id=user_id,
             new_status=new_status,
             changed_by=f"admin_{event.message.sender.user_id}",
-            reason=f"Установлен администратором {event.message.sender.user_id}"
+            reason=f"Установен администратором {event.message.sender.user_id}"
         )
         return f"✅ Статус пользователя {user_id} успешно изменен на '{new_status}'"
     except Exception as e:
@@ -405,10 +453,20 @@ async def handle_message(event: MessageCreated):
     if text_lower in ['мойпрофиль', 'профиль', 'profile', 'мой профиль']:
         try:
             profile_text = await get_user_profile_text(user_id)
-            await send_response(event.bot, event.message.recipient.chat_id, profile_text)
+            await send_response(
+                event.bot, 
+                event.message.recipient.chat_id, 
+                profile_text,
+                delete_previous_message_id=event.message.id
+            )
         except Exception as e:
             logger.error(f"Ошибка получения профиля: {e}")
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
+            await send_response(
+                event.bot, 
+                event.message.recipient.chat_id, 
+                "❌ Ошибка при загрузке профиля",
+                delete_previous_message_id=event.message.id
+            )
         return
     
     # Обработка команды выбора роли
@@ -434,7 +492,12 @@ async def handle_message(event: MessageCreated):
                 if command in ['роли', 'roles']:
                     await handle_role_selection(event)
                 else:
-                    await send_response(event.bot, event.message.recipient.chat_id, response_text)
+                    await send_response(
+                        event.bot, 
+                        event.message.recipient.chat_id, 
+                        response_text,
+                        delete_previous_message_id=event.message.id
+                    )
                 return
             except Exception as e:
                 logger.error(f"Ошибка обработки команды {command}: {e}")
@@ -451,18 +514,38 @@ async def handle_admin_status_command(event: MessageCreated):
     try:
         parts = event.message.body.text.split()
         if len(parts) < 2:
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /status <user_id>")
+            await send_response(
+                event.bot, 
+                event.message.recipient.chat_id, 
+                "❌ Использование: /status <user_id>",
+                delete_previous_message_id=event.message.id
+            )
             return
         
         user_id = int(parts[1])
         response = await handle_admin_status(event, user_id)
-        await send_response(event.bot, event.message.recipient.chat_id, response)
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            response,
+            delete_previous_message_id=event.message.id
+        )
         
     except ValueError:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ Неверный формат user_id",
+            delete_previous_message_id=event.message.id
+        )
     except Exception as e:
         logger.error(f"Ошибка обработки команды status: {e}")
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ Ошибка при выполнении команды",
+            delete_previous_message_id=event.message.id
+        )
 
 @dp.message_created(Command('set_status'))
 async def handle_set_status_command(event: MessageCreated):
@@ -470,31 +553,61 @@ async def handle_set_status_command(event: MessageCreated):
     try:
         parts = event.message.body.text.split()
         if len(parts) < 3:
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /set_status <user_id> <status>")
+            await send_response(
+                event.bot, 
+                event.message.recipient.chat_id, 
+                "❌ Использование: /set_status <user_id> <status>",
+                delete_previous_message_id=event.message.id
+            )
             return
         
         user_id = int(parts[1])
         new_status = ' '.join(parts[2:])
         response = await handle_set_status(event, user_id, new_status)
-        await send_response(event.bot, event.message.recipient.chat_id, response)
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            response,
+            delete_previous_message_id=event.message.id
+        )
         
     except ValueError:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ Неверный формат user_id",
+            delete_previous_message_id=event.message.id
+        )
     except Exception as e:
         logger.error(f"Ошибка обработки команды set_status: {e}")
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ Ошибка при выполнении команды",
+            delete_previous_message_id=event.message.id
+        )
 
 @dp.message_created(Command('approve_role'))
 async def handle_approve_role_command(event: MessageCreated):
     """Обрабатывает команду подтверждения роли пользователя"""
     if event.message.sender.user_id not in ADMIN_IDS:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ У вас нет прав администратора",
+            delete_previous_message_id=event.message.id
+        )
         return
     
     try:
         parts = event.message.body.text.split()
         if len(parts) < 2:
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /approve_role <user_id>")
+            await send_response(
+                event.bot, 
+                event.message.recipient.chat_id, 
+                "❌ Использование: /approve_role <user_id>",
+                delete_previous_message_id=event.message.id
+            )
             return
         
         user_id = int(parts[1])
@@ -519,22 +632,43 @@ async def handle_approve_role_command(event: MessageCreated):
         await send_response(
             event.bot, 
             event.message.recipient.chat_id,
-            f"✅ Роль пользователя {user_id} успешно подтверждена!"
+            f"✅ Роль пользователя {user_id} успешно подтверждена!",
+            delete_previous_message_id=event.message.id
         )
         
     except ValueError:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ Неверный формат user_id",
+            delete_previous_message_id=event.message.id
+        )
     except Exception as e:
         logger.error(f"Ошибка подтверждения роли: {e}")
-        await send_response(event.bot, event.message.recipient.chat_id, f"❌ Ошибка при подтверждении роли: {e}")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            f"❌ Ошибка при подтверждении роли: {e}",
+            delete_previous_message_id=event.message.id
+        )
 
 @dp.message_created(Command('admin'))
 async def handle_admin_help(event: MessageCreated):
     """Показывает справку по админ-командам"""
     if event.message.sender.user_id in ADMIN_IDS:
-        await send_response(event.bot, event.message.recipient.chat_id, ADMIN_HELP)
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            ADMIN_HELP,
+            delete_previous_message_id=event.message.id
+        )
     else:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "❌ У вас нет прав администратора",
+            delete_previous_message_id=event.message.id
+        )
 
 # --- Обработчик callback'ов для кнопок (ОБНОВЛЕН) ---
 @dp.message_callback()
@@ -603,7 +737,12 @@ async def handle_callback(event: MessageCallback):
                 
         except Exception as e:
             logger.error(f"Ошибка сохранения роли пользователя: {e}")
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выборе роли")
+            await send_response(
+                event.bot, 
+                event.message.recipient.chat_id, 
+                "❌ Ошибка при выборе роли",
+                delete_previous_message_id=event.message.id
+            )
         return
     
     # Обработка смены роли
@@ -613,15 +752,23 @@ async def handle_callback(event: MessageCallback):
     
     # Обработка поддержки
     if payload == "support":
-        await send_response(event.bot, event.message.recipient.chat_id, 
-                           "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1",
+            delete_previous_message_id=event.message.id
+        )
         return
     
     # Обработка открытия приложения (fallback)
     if payload == "open_max_app":
         web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/auth.html"
-        await send_response(event.bot, event.message.recipient.chat_id, 
-                          f"🧠 Открыть MAX Мозг: {web_app_url}")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            f"🧠 Открыть MAX Мозг: {web_app_url}",
+            delete_previous_message_id=event.message.id
+        )
         return
     
     # Обработка ожидания подтверждения
@@ -633,8 +780,12 @@ async def handle_callback(event: MessageCallback):
     
     # Обработка связи с администратором
     if payload == "contact_admin":
-        await send_response(event.bot, event.message.recipient.chat_id, 
-                           "📞 Для связи с администратором:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
+        await send_response(
+            event.bot, 
+            event.message.recipient.chat_id, 
+            "📞 Для связи с администратором:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1",
+            delete_previous_message_id=event.message.id
+        )
         return
 
 # --- Основная функция ---
