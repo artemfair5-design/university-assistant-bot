@@ -221,12 +221,22 @@ async def generate_qr_code(url):
 async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
     """Отправляет QR-код через MAX API"""
     try:
-        # Загружаем файл через upload_file_buffer
-        upload_result = await bot_instance.upload_file_buffer(
-            file_buffer=qr_code_bytes.getvalue(),
-            filename="qr_code.png",
-            file_type="image/png"  # Указываем тип файла
-        )
+        # Пробуем разные варианты вызова upload_file_buffer
+        try:
+            # Вариант 1: передаем буфер как позиционный аргумент
+            upload_result = await bot_instance.upload_file_buffer(
+                qr_code_bytes.getvalue(),  # данные файла
+                "qr_code.png",             # имя файла
+                "image/png"                # тип файла
+            )
+        except TypeError as e:
+            # Вариант 2: если не сработал позиционный вызов
+            logger.warning(f"Позиционный вызов не сработал: {e}, пробуем именованные параметры")
+            upload_result = await bot_instance.upload_file_buffer(
+                file=qr_code_bytes.getvalue(),
+                filename="qr_code.png",
+                file_type="image/png"
+            )
         
         logger.info(f"Файл загружен: {upload_result}")
         
