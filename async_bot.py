@@ -647,52 +647,33 @@ async def handle_callback(event: MessageCallback):
         await handle_role_selection(event)
         return
     
-    # Обработка поддержки (ОБНОВЛЕНО - ВТОРОЙ СПОСОБ)
+    # Обработка поддержки (ОБНОВЛЕНО - OpenAppButton с прямой ссылкой)
     if payload == "support":
         builder = InlineKeyboardBuilder()
         
-        # Альтернатива: используем CallbackButton с переходом по ссылке
+        # Кнопка для открытия профиля администратора в MAX
         builder.row(
-            CallbackButton(
-                text="👤 Открыть мой профиль в MAX", 
-                payload="open_max_profile"
+            OpenAppButton(
+                text="👤 Связаться с Администратором",
+                web_app=MAX_PROFILE_URL
             )
         )
-        builder.row(CallbackButton(text="↩️ Назад", payload="back_to_menu"))
+        
+        # Кнопка для возврата в главное меню
+        builder.row(CallbackButton(text="↩️ Назад в меню", payload="back_to_menu"))
         
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         
         support_text = """🧠 Поддержка MAX Мозг
 
-Для связи со мной нажмите кнопку ниже, чтобы открыть мой профиль в MAX."""
+Для быстрой связи со мной нажмите кнопку ниже, чтобы открыть мой профиль в MAX.
+
+Там вы можете:
+• Написать мне сообщение
+• Посмотреть мои контакты
+• Узнать больше о разработке"""
 
         await send_keyboard_message(event.bot, chat_id, support_text, builder.as_markup())
-        return
-    
-    # Обработка открытия профиля MAX
-    if payload == "open_max_profile":
-        profile_url = "https://max.ru/u/f9LHodD0cOKjtP4JqI_7NVijOYB4HbrU9UeT3xlr7m76Mmz7CEgQUmEQLzE"
-        
-        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-        
-        # Отправляем сообщение с прямой ссылкой
-        await send_temporary_message(
-            event.bot, 
-            chat_id, 
-            f"👤 Вот ссылка на мой профиль в MAX:\n\n{profile_url}\n\nСкопируйте и откройте в браузере или приложении MAX."
-        )
-        
-        # Показываем меню поддержки снова
-        builder = InlineKeyboardBuilder()
-        builder.row(CallbackButton(text="👤Связаться с Администратором", payload="open_max_profile"))
-        builder.row(CallbackButton(text="↩️ Назад", payload="back_to_menu"))
-        
-        await send_keyboard_message(
-            event.bot, 
-            chat_id, 
-            "Чем еще могу помочь?", 
-            builder.as_markup()
-        )
         return
     
     # Обработка возврата в главное меню
