@@ -84,8 +84,11 @@ MAX_ROLES = {
     "гость": "👤 Гость"
 }
 
-# Роли, требующие подтверждения администратора
-ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
+# Роли, требующие подтверждения администратора (убрали "абитуриент" для немедленного доступа)
+ROLES_REQUIRING_APPROVAL = ["студент", "работник", "администрация"]
+
+# Кэш для управления сообщениями с кнопками
+message_cache = {}
 
 # --- Универсальные функции (ОБНОВЛЕНЫ) ---
 async def get_start_keyboard():
@@ -154,16 +157,43 @@ async def get_max_app_keyboard(event, user_role="гость"):
     
     return builder.as_markup()
 
-async def send_response(bot_instance, chat_id, text, keyboard=None):
-    """Универсальная функция отправки сообщений."""
+async def get_support_keyboard():
+    """Генерирует клавиатуру только с кнопкой поддержки."""
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
+    return builder.as_markup()
+
+async def send_response(bot_instance, chat_id, text, keyboard=None, remove_previous=True):
+    """Универсальная функция отправки сообщений с удалением предыдущих кнопок."""
     try:
+        # Удаляем предыдущее сообщение с кнопками, если требуется
+        if remove_previous and chat_id in message_cache:
+            try:
+                old_message_id = message_cache[chat_id]
+                await bot_instance.delete_message(chat_id, old_message_id)
+                logger.info(f"Удалили предыдущее сообщение с кнопками {old_message_id} в чате {chat_id}")
+                del message_cache[chat_id]
+            except Exception as e:
+                logger.warning(f"Не удалось удалить предыдущее сообщение с кнопками: {e}")
+                # Если не удалось удалить, всё равно очищаем запись
+                if chat_id in message_cache:
+                    del message_cache[chat_id]
+
         attachments = [keyboard] if keyboard else []
-        await bot_instance.send_message(chat_id=chat_id, text=text, attachments=attachments)
+        sent_message = await bot_instance.send_message(chat_id=chat_id, text=text, attachments=attachments)
+        
+        # Сохраняем ID сообщения с кнопками для будущего удаления
+        if keyboard:
+            message_cache[chat_id] = sent_message.message_id
+            logger.info(f"Сохранили сообщение с кнопками {sent_message.message_id} для чата {chat_id}")
+        
         logger.info(f"Сообщение отправлено в чат {chat_id}")
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
         try:
-            await bot_instance.send_message(chat_id=chat_id, text=text)
+            # Fallback без клавиатуры
+            sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
+            # Не сохраняем в message_cache, так как без кнопок
         except Exception as fallback_e:
             logger.error(f"Fallback тоже не сработал: {fallback_e}")
 
@@ -171,8 +201,7 @@ async def send_response(bot_instance, chat_id, text, keyboard=None):
 async def handle_role_pending_approval(event, role_name):
     """Обрабатывает ожидание подтверждения роли"""
     role_display = MAX_ROLES.get(role_name, "Пользователь")
-    keyboard = InlineKeyboardBuilder()
-    keyboard.row(CallbackButton(text="📞 Связаться с администратором", payload="contact_admin"))
+    keyboard = await get_support_keyboard()  # Только кнопка поддержки
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     message = ROLE_APPROVAL_PENDING.format(role=role_display)
@@ -193,7 +222,7 @@ async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
     
     for admin_id in ADMIN_IDS:
         try:
-            await send_response(event.bot, admin_id, message)
+            await send_response(event.bot, admin_id, message, remove_previous=False)
         except Exception as e:
             logger.warning(f"Не удалось уведомить администратора {admin_id}: {e}")
 
@@ -234,7 +263,7 @@ async def handle_role_selection(event):
 async def handle_role_approved(event, role_name):
     """Обрабатывает подтверждение выбора роли."""
     role_display = MAX_ROLES.get(role_name, "Пользователь")
-    keyboard = await get_max_app_keyboard(event, user_role=role_name)
+    keyboard = await get_support_keyboard()  # Только кнопка поддержки после выбора роли
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
@@ -246,7 +275,7 @@ async def handle_role_approved(event, role_name):
 
 async def handle_role_rejected(event):
     """Обрабатывает ограниченный доступ."""
-    keyboard = await get_max_app_keyboard(event, user_role="гость")
+    keyboard = await get_support_keyboard()  # Только кнопка поддержки
     
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
@@ -257,23 +286,9 @@ async def get_statistics_text():
     """Генерирует текст статистики для MAX Мозг"""
     try:
         stats = await db.get_user_stats()
-        status_text = "\n".join([f"  - {status}: {count}" for status, count in stats.get('status_stats', {}).items()])
-        role_text = "\n".join([f"  - {role}: {count}" for role, count in stats.get('role_stats', {}).items()])
-        
-        return f"""📊 Статистика MAX Мозг:
-
-👥 Всего пользователей: {stats['total_users']}
-💬 Сообщений в боте: {stats['total_messages']}
-⭐ Отзывов: {stats['total_feedback']}
-🔥 Активных за 7 дней: {stats['active_users_7d']}
-✅ Подтвержденных ролей: {stats.get('approved_users', 0)}
-🧠 Доступов к платформе: {stats.get('mini_app_users', 0)}
-
-🏷️ Распределение по статусам:
-{status_text if status_text else '  - Нет данных'}
-
-🎯 Распределение по ролям:
-{role_text if role_text else '  - Нет данных'}"""
+        status_text = "\n".join([f" - {status}: {count}" for status, count in stats.get('status_stats', {}).items()])
+        role_text = "\n".join([f" - {role}: {count}" for role, count in stats.get('role_stats', {}).items()])
+        return f"""📊 Статистика MAX Мозг: 👥 Всего пользователей: {stats['total_users']} 💬 Сообщений в боте: {stats['total_messages']} ⭐ Отзывов: {stats['total_feedback']} 🔥 Активных за 7 дней: {stats['active_users_7d']} ✅ Подтвержденных ролей: {stats.get('approved_users', 0)} 🧠 Доступов к платформе: {stats.get('mini_app_users', 0)} 🏷️ Распределение по статусам: {status_text if status_text else ' - Нет данных'} 🎯 Распределение по ролям: {role_text if role_text else ' - Нет данных'}"""
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
         return "❌ Не удалось получить статистику."
@@ -284,22 +299,10 @@ async def get_user_profile_text(user_id: int):
         user_info = await db.get_user_info(user_id)
         if not user_info:
             return "❌ Пользователь не найден"
-        
         role_display = MAX_ROLES.get(user_info.get('selected_role', 'гость'), 'Гость')
         role_status = "✅ Подтверждена" if user_info.get('role_approved') else "⏳ Ожидает подтверждения"
         can_change = "✅ Да" if user_info.get('role_change_allowed', True) else "❌ Нет"
-        
-        return f"""🧠 Ваш профиль MAX Мозг:
-
-🆔 ID: {user_info['user_id']}
-👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''}
-📛 Юзернейм: @{user_info['username'] or 'Не указан'}
-🎯 Роль: {role_display}
-✅ Статус роли: {role_status}
-🔄 Можно сменить роль: {can_change}
-🧠 Доступов к платформе: {user_info['mini_app_access_count'] or 0}
-📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')}
-💬 Сообщений: {user_info['message_count']}"""
+        return f"""🧠 Ваш профиль MAX Мозг: 🆔 ID: {user_info['user_id']} 👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''} 📛 Юзернейм: @{user_info['username'] or 'Не указан'} 🎯 Роль: {role_display} ✅ Статус роли: {role_status} 🔄 Можно сменить роль: {can_change} 🧠 Доступов к платформе: {user_info['mini_app_access_count'] or 0} 📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')} 💬 Сообщений: {user_info['message_count']}"""
     except Exception as e:
         logger.error(f"Ошибка получения профиля: {e}")
         return "❌ Не удалось загрузить профиль"
@@ -317,31 +320,18 @@ async def handle_admin_status(event, user_id: int):
     """Обрабатывает команду статуса пользователя для администратора"""
     if event.message.sender.user_id not in ADMIN_IDS:
         return "❌ У вас нет прав администратора"
-    
     user_info = await db.get_user_info(user_id)
     if not user_info:
         return f"❌ Пользователь с ID {user_id} не найден"
-    
     role_display = MAX_ROLES.get(user_info.get('selected_role', 'гость'), 'Гость')
     role_status = "✅ Подтверждена" if user_info.get('role_approved') else "❌ Не подтверждена"
     can_change = "✅ Да" if user_info.get('role_change_allowed', True) else "❌ Нет"
-    
-    return f"""🧠 Профиль пользователя {user_id}:
-
-👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''}
-📛 Юзернейм: @{user_info['username'] or 'Не указан'}
-🎯 Роль: {role_display}
-✅ Статус роли: {role_status}
-🔄 Можно сменить роль: {can_change}
-🧠 Доступов к MAX Мозг: {user_info['mini_app_access_count'] or 0}
-📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')}
-💬 Сообщений: {user_info['message_count']}"""
+    return f"""🧠 Профиль пользователя {user_id}: 👤 Имя: {user_info['first_name'] or 'Не указано'} {user_info['last_name'] or ''} 📛 Юзернейм: @{user_info['username'] or 'Не указан'} 🎯 Роль: {role_display} ✅ Статус роли: {role_status} 🔄 Можно сменить роль: {can_change} 🧠 Доступов к MAX Мозг: {user_info['mini_app_access_count'] or 0} 📅 Регистрация: {user_info['registration_date'].strftime('%d.%m.%Y %H:%M')} 💬 Сообщений: {user_info['message_count']}"""
 
 async def handle_set_status(event, user_id: int, new_status: str):
     """Обрабатывает команду установки статуса пользователя"""
     if event.message.sender.user_id not in ADMIN_IDS:
         return "❌ У вас нет прав администратора"
-    
     try:
         await db.update_user_status(
             user_id=user_id,
@@ -405,10 +395,10 @@ async def handle_message(event: MessageCreated):
     if text_lower in ['мойпрофиль', 'профиль', 'profile', 'мой профиль']:
         try:
             profile_text = await get_user_profile_text(user_id)
-            await send_response(event.bot, event.message.recipient.chat_id, profile_text)
+            await send_response(event.bot, event.message.recipient.chat_id, profile_text, remove_previous=False)
         except Exception as e:
             logger.error(f"Ошибка получения профиля: {e}")
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля", remove_previous=False)
         return
     
     # Обработка команды выбора роли
@@ -434,7 +424,7 @@ async def handle_message(event: MessageCreated):
                 if command in ['роли', 'roles']:
                     await handle_role_selection(event)
                 else:
-                    await send_response(event.bot, event.message.recipient.chat_id, response_text)
+                    await send_response(event.bot, event.message.recipient.chat_id, response_text, remove_previous=False)
                 return
             except Exception as e:
                 logger.error(f"Ошибка обработки команды {command}: {e}")
@@ -451,18 +441,18 @@ async def handle_admin_status_command(event: MessageCreated):
     try:
         parts = event.message.body.text.split()
         if len(parts) < 2:
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /status <user_id>")
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /status <user_id>", remove_previous=False)
             return
         
         user_id = int(parts[1])
         response = await handle_admin_status(event, user_id)
-        await send_response(event.bot, event.message.recipient.chat_id, response)
+        await send_response(event.bot, event.message.recipient.chat_id, response, remove_previous=False)
         
     except ValueError:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id", remove_previous=False)
     except Exception as e:
         logger.error(f"Ошибка обработки команды status: {e}")
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды", remove_previous=False)
 
 @dp.message_created(Command('set_status'))
 async def handle_set_status_command(event: MessageCreated):
@@ -470,31 +460,31 @@ async def handle_set_status_command(event: MessageCreated):
     try:
         parts = event.message.body.text.split()
         if len(parts) < 3:
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /set_status <user_id> <status>")
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /set_status <user_id> <status>", remove_previous=False)
             return
         
         user_id = int(parts[1])
         new_status = ' '.join(parts[2:])
         response = await handle_set_status(event, user_id, new_status)
-        await send_response(event.bot, event.message.recipient.chat_id, response)
+        await send_response(event.bot, event.message.recipient.chat_id, response, remove_previous=False)
         
     except ValueError:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id", remove_previous=False)
     except Exception as e:
         logger.error(f"Ошибка обработки команды set_status: {e}")
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выполнении команды", remove_previous=False)
 
 @dp.message_created(Command('approve_role'))
 async def handle_approve_role_command(event: MessageCreated):
     """Обрабатывает команду подтверждения роли пользователя"""
     if event.message.sender.user_id not in ADMIN_IDS:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора", remove_previous=False)
         return
     
     try:
         parts = event.message.body.text.split()
         if len(parts) < 2:
-            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /approve_role <user_id>")
+            await send_response(event.bot, event.message.recipient.chat_id, "❌ Использование: /approve_role <user_id>", remove_previous=False)
             return
         
         user_id = int(parts[1])
@@ -511,7 +501,8 @@ async def handle_approve_role_command(event: MessageCreated):
                 await send_response(
                     event.bot, 
                     user_id,
-                    f"✅ Ваша роль *{role_display}* подтверждена!\n\nТеперь вам доступен полный функционал MAX Мозг."
+                    f"✅ Ваша роль *{role_display}* подтверждена!\n\nТеперь вам доступен полный функционал MAX Мозг.",
+                    keyboard=await get_support_keyboard()  # Только поддержка после подтверждения
                 )
             except Exception as e:
                 logger.warning(f"Не удалось уведомить пользователя {user_id}: {e}")
@@ -519,22 +510,23 @@ async def handle_approve_role_command(event: MessageCreated):
         await send_response(
             event.bot, 
             event.message.recipient.chat_id,
-            f"✅ Роль пользователя {user_id} успешно подтверждена!"
+            f"✅ Роль пользователя {user_id} успешно подтверждена!",
+            remove_previous=False
         )
         
     except ValueError:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ Неверный формат user_id", remove_previous=False)
     except Exception as e:
         logger.error(f"Ошибка подтверждения роли: {e}")
-        await send_response(event.bot, event.message.recipient.chat_id, f"❌ Ошибка при подтверждении роли: {e}")
+        await send_response(event.bot, event.message.recipient.chat_id, f"❌ Ошибка при подтверждении роли: {e}", remove_previous=False)
 
 @dp.message_created(Command('admin'))
 async def handle_admin_help(event: MessageCreated):
     """Показывает справку по админ-командам"""
     if event.message.sender.user_id in ADMIN_IDS:
-        await send_response(event.bot, event.message.recipient.chat_id, ADMIN_HELP)
+        await send_response(event.bot, event.message.recipient.chat_id, ADMIN_HELP, remove_previous=False)
     else:
-        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора")
+        await send_response(event.bot, event.message.recipient.chat_id, "❌ У вас нет прав администратора", remove_previous=False)
 
 # --- Обработчик callback'ов для кнопок (ОБНОВЛЕН) ---
 @dp.message_callback()
@@ -614,14 +606,16 @@ async def handle_callback(event: MessageCallback):
     # Обработка поддержки
     if payload == "support":
         await send_response(event.bot, event.message.recipient.chat_id, 
-                           "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
+                           "📞 Поддержка MAX Мозг:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1",
+                           remove_previous=False)
         return
     
     # Обработка открытия приложения (fallback)
     if payload == "open_max_app":
         web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/auth.html"
         await send_response(event.bot, event.message.recipient.chat_id, 
-                          f"🧠 Открыть MAX Мозг: {web_app_url}")
+                          f"🧠 Открыть MAX Мозг: {web_app_url}",
+                          remove_previous=False)
         return
     
     # Обработка ожидания подтверждения
@@ -634,7 +628,8 @@ async def handle_callback(event: MessageCallback):
     # Обработка связи с администратором
     if payload == "contact_admin":
         await send_response(event.bot, event.message.recipient.chat_id, 
-                           "📞 Для связи с администратором:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1")
+                           "📞 Для связи с администратором:\n\nEmail: artemfair5@gmail.com\nТелеграм: @Mulllymka1",
+                           remove_previous=False)
         return
 
 # --- Основная функция ---
