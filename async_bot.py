@@ -138,9 +138,10 @@ async def get_main_menu_keyboard(event, user_role="гость"):
     if not is_approved and current_role in ROLES_REQUIRING_APPROVAL:
         builder.row(CallbackButton(text="⏳ Статус подтверждения", payload="pending_approval"))
     
-    # Всегда показываем кнопки для основных действий
-    builder.row(CallbackButton(text="🔄 Сменить роль", payload="change_role"))
-    builder.row(CallbackButton(text="👤 Мой профиль", payload="my_profile"))
+    # АДМИНИСТРАТОРЫ могут всегда менять роль, остальные - только если разрешено
+    if user_id in ADMIN_IDS or await db.can_change_role(user_id):
+        builder.row(CallbackButton(text="🔄 Сменить роль", payload="change_role"))
+    
     builder.row(CallbackButton(text="📞 Поддержка", payload="support"))
     
     return builder.as_markup()
@@ -216,7 +217,14 @@ async def handle_role_selection(event):
     """Обрабатывает выбор роли для MAX Мозг с проверкой блокировки"""
     user_id = event.callback.user.user_id if hasattr(event, 'callback') else event.message.sender.user_id
     
-    # Проверяем, может ли пользователь менять роль
+    # АДМИНИСТРАТОРЫ могут всегда менять роль без ограничений
+    if user_id in ADMIN_IDS:
+        keyboard = await get_role_selection_keyboard()
+        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+        await send_main_menu(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
+        return
+    
+    # Для обычных пользователей проверяем возможность смены роли
     can_change = await db.can_change_role(user_id)
     current_role_info = await db.get_user_role_info(user_id)
     current_role = current_role_info.get('selected_role')
@@ -582,8 +590,9 @@ async def handle_callback(event: MessageCallback):
         logger.info(f"Пользователь {user_id} выбрал роль: {role_name}")
         
         try:
-            # Определяем, разрешена ли смена роли (для не-гостевых ролей блокируем смену)
-            allow_role_change = role_name == 'гость'
+            # Для АДМИНИСТРАТОРОВ всегда разрешаем смену роли
+            # Для обычных пользователей блокируем смену не-гостевых ролей
+            allow_role_change = (user_id in ADMIN_IDS) or (role_name == 'гость')
             
             # Сохраняем роль с настройками блокировки
             await db.update_user_role(user_id, role_name, allow_role_change)
@@ -604,14 +613,14 @@ async def handle_callback(event: MessageCallback):
                 'selected_role': role_name
             })
             
-            # Если роль требует подтверждения
-            if role_name in ROLES_REQUIRING_APPROVAL:
+            # Если роль требует подтверждения и пользователь не администратор
+            if role_name in ROLES_REQUIRING_APPROVAL and user_id not in ADMIN_IDS:
                 # Уведомляем администраторов
                 await notify_admins_about_pending_role(event, user_id, role_name)
                 # Показываем пользователю сообщение о ожидании подтверждения
                 await handle_role_pending_approval(event, role_name)
             else:
-                # Для гостевой роли сразу даем доступ
+                # Для гостевой роли или администратора сразу даем доступ
                 await handle_role_approved(event, role_name)
                 
         except Exception as e:
@@ -622,19 +631,6 @@ async def handle_callback(event: MessageCallback):
     # Обработка смены роли
     if payload == "change_role":
         await handle_role_selection(event)
-        return
-    
-    # Обработка профиля
-    if payload == "my_profile":
-        try:
-            profile_text = await get_user_profile_text(user_id)
-            # Показываем профиль как временное сообщение, затем главное меню
-            await send_temporary_message(event.bot, event.message.recipient.chat_id, profile_text)
-            keyboard = await get_main_menu_keyboard(event)
-            await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
-        except Exception as e:
-            logger.error(f"Ошибка получения профиля: {e}")
-            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
         return
     
     # Обработка поддержки
