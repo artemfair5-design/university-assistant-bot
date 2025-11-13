@@ -14,6 +14,7 @@ COPY requirements.txt .
 
 # Устанавливаем Python зависимости
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install qrcode[pil]
 
 # Копируем исходный код
 COPY . .
