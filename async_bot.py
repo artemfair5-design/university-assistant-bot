@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import socket
+import json
+import requests
 from datetime import datetime
 from maxapi import Bot, Dispatcher
 from maxapi.types import BotStarted, Command, MessageCreated, OpenAppButton, MessageCallback
@@ -39,9 +41,51 @@ async def get_last_message_id(chat_id: int) -> str | None:
     """Возвращает ID последнего сообщения бота для указанного чата"""
     return last_bot_messages.get(chat_id)
 
-async def edit_last_message(bot_instance, chat_id: int, new_text: str, keyboard=None, parse_mode=None) -> bool:
+# --- НОВАЯ ФУНКЦИЯ редактирования сообщения по образцу ---
+async def edit_message_direct(bot_instance, message_id: str, text: str, attachments=None, link=None, notify=True, format=None):
+    """
+    Прямое редактирование сообщения через MAX API по образцу
+    https://dev.max.ru/#operation/editMessage
+    """
+    update = None
+    method = 'messages'
+    params = (
+        ('access_token', bot_instance.token),
+        ('message_id', message_id),
+    )
+    data = {
+        "text": text,
+        "attachments": attachments,
+        "link": link,
+        "notify": notify,
+        "format": format
+    }
+    flag = 'attachment.not.ready'
+    while flag == 'attachment.not.ready':
+        try:
+            response = requests.put(bot_instance.url + method, params=params, data=json.dumps(data))
+            upd = response.json()
+            if 'code' in upd.keys():
+                flag = upd.get('code')
+                logger.info('Ожидание готовности вложения...')
+                await asyncio.sleep(5)  # Ждем 5 секунд перед повторной попыткой
+            else:
+                flag = None
+                if response.status_code == 200:
+                    update = response.json()
+                    logger.info(f"Сообщение {message_id} успешно отредактировано")
+                else:
+                    logger.error(f"Ошибка редактирования сообщения: {response.status_code}")
+                    return None
+        except Exception as e:
+            logger.error(f"Ошибка в edit_message_direct: {e}")
+            return None
+    return update
+
+async def edit_last_message(bot_instance, chat_id: int, new_text: str, keyboard=None, parse_mode=None):
     """
     Редактирует последнее сообщение бота в указанном чате
+    Использует прямое редактирование через API
     """
     try:
         message_id = await get_last_message_id(chat_id)
@@ -53,27 +97,36 @@ async def edit_last_message(bot_instance, chat_id: int, new_text: str, keyboard=
             logger.error(f"Текст слишком длинный ({len(new_text)} символов). Максимум 4000.")
             return False
         
+        # Подготавливаем attachments если есть клавиатура
         attachments = [keyboard] if keyboard else None
+        
+        # Определяем формат на основе parse_mode
+        format_param = None
+        if parse_mode == "markdown":
+            format_param = "markdown"
+        elif parse_mode == "html":
+            format_param = "html"
         
         logger.info(f"Пытаемся отредактировать сообщение {message_id} в чате {chat_id}")
         
-        # ИСПРАВЛЕНИЕ: Правильное использование EditMessage
-        editor = EditMessage(
-            bot=bot_instance,
+        # Используем прямое редактирование через API
+        result = await edit_message_direct(
+            bot_instance=bot_instance,
             message_id=message_id,
             text=new_text,
             attachments=attachments,
-            parse_mode=parse_mode
+            format=format_param,
+            notify=True
         )
         
-        result = await editor.fetch()
-        
-        if isinstance(result, Error):
-            logger.error(f"Ошибка редактирования сообщения: {result}")
+        if result is None:
+            logger.error(f"Не удалось отредактировать сообщение {message_id}")
             return False
         else:
             logger.info(f"Сообщение отредактировано в чате {chat_id}")
-            await save_last_message(chat_id, result.message_id)
+            # Сохраняем новый message_id после редактирования (если он изменился)
+            if 'message_id' in result:
+                await save_last_message(chat_id, result['message_id'])
             return True
             
     except Exception as e:
