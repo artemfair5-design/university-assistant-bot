@@ -867,7 +867,13 @@ COMMAND_HANDLERS = {
 # --- Основная функция ---
 async def main():
     logger.info("Запуск бота с long polling...")
-    logger.info(f"Загружено данных о {len(db.user_data)} пользователях")
+    try:
+        stats = await db.get_user_stats() # <-- Предполагается, что такая функция есть в database.py
+        total_users = stats.get('total_users', 0)
+        logger.info(f"Загружено данных о {total_users} пользователях из БД")
+    except Exception as e:
+        logger.error(f"Не удалось получить статистику пользователей из БД: {e}")
+        logger.info("Загружено данных о 0 пользователях (ошибка получения статистики)")
 
     try:
         await bot.delete_webhook()
@@ -877,11 +883,17 @@ async def main():
 
     await dp.start_polling(bot)
 
-if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен")
-        logger.info(f"Сохранено данных о {len(db.user_data)} пользователях")
-    except Exception as e:
-        logger.error(f"Ошибка при работе бота: {e}")
+    if __name__ == '__main__':
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            logger.info("Бот остановлен")
+        try:
+            final_stats = await db.get_user_stats()
+            final_total_users = final_stats.get('total_users', 0)
+            logger.info(f"Сохранено данных о {final_total_users} пользователях в БД")
+        except Exception as e:
+            logger.error(f"Не удалось получить финальную статистику пользователей из БД: {e}")
+            logger.info("Сохранено данных о неизвестном количестве пользователей (ошибка получения статистики)")
+        except Exception as e:
+            logger.error(f"Ошибка при работе бота: {e}")
