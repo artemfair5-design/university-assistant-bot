@@ -7,6 +7,7 @@ from maxapi import Bot, Dispatcher
 from maxapi.types import BotStarted, Command, MessageCreated, OpenAppButton, MessageCallback
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from maxapi.types.attachments.buttons.callback_button import CallbackButton
+from maxapi.types.input_media import InputMediaBuffer  # ← ДОБАВЬТЕ ЭТОТ ИМПОРТ
 import aiohttp
 
 # Импортируем нашу базу данных
@@ -220,71 +221,23 @@ async def generate_qr_code(url):
         logger.error(f"Ошибка генерации QR-кода: {e}")
         return None
 
-# --- Функция для генерации QR-кода ---
-async def generate_qr_code(url):
-    """Генерирует QR-код для указанной ссылки"""
-    try:
-        import qrcode
-        from io import BytesIO
-        
-        # Создаем QR-код
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(url)
-        qr.make(fit=True)
-        
-        # Создаем изображение
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        # Сохраняем в bytes
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-        
-        return img_bytes
-    except ImportError:
-        logger.error("Библиотека qrcode не установлена. Установите: pip install qrcode[pil]")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка генерации QR-кода: {e}")
-        return None
-
 async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
-    """Отправляет QR-код через MAX API"""
+    """Отправляет QR-код через MAX API - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     try:
-        # --- ИМПОРТИРУЕМ InputMediaBuffer ---
-        from maxapi.types.input_media import InputMediaBuffer
-
-        # --- СОЗДАЕМ InputMediaBuffer ---
-        # Передаем bytes, имя файла и тип
+        # Создаем InputMediaBuffer ПРАВИЛЬНО - без параметра 'type'
         buffer_obj = InputMediaBuffer(
-            buffer=qr_code_bytes.getvalue(), # передаем bytes
-            filename="qr_code.png",
-            type="image"
+            media=qr_code_bytes.getvalue(),  # передаем bytes
+            filename="qr_code.png"
         )
 
-        # Загружаем файл
-        # Правильный вызов метода - передаем объект InputMediaBuffer
-        upload_result = await bot_instance.upload_file_buffer(
-            buffer=buffer_obj, # <-- Передаем InputMediaBuffer
-            filename="qr_code.png", # Этот аргумент может быть не нужен внутри upload_file_buffer,
-                                   # если вся информация уже в InputMediaBuffer, но пусть будет для совместимости
-            type="image"  # Используем строку
-        )
-        
-        logger.info(f"Файл загружен: {upload_result}")
-        
-        # Отправляем сообщение
+        # Отправляем сообщение с вложением
         await bot_instance.send_message(
             chat_id=chat_id,
             text=caption,
-            attachments=[upload_result]
+            attachments=[buffer_obj]  # передаем как список вложений
         )
         
+        logger.info(f"QR-код успешно отправлен в чат {chat_id}")
         return True
         
     except Exception as e:
