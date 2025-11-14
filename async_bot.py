@@ -163,7 +163,7 @@ async def edit_last_message_or_send_new(bot, chat_id, user_id, text, keyboard=No
     if last_msg_id:
         try:
             logger.info(f"Пытаюсь отредактировать сообщение {last_msg_id} в чате {chat_id} для user_id {user_id}")
-            
+
             # --- Вызов MAX API для редактирования сообщения ---
             # URL для метода messages.edit
             api_url = "https://api.max.ru/v1/messages.edit"
@@ -177,16 +177,11 @@ async def edit_last_message_or_send_new(bot, chat_id, user_id, text, keyboard=No
                 "chat_id": chat_id,       # ID чата
                 "message": text           # Новый текст
             }
-            # Добавляем клавиатуру в payload, если она передана
-            if keyboard:
-                 # ATTENTION: Структура 'keyboard' в messages.edit может отличаться от messages.send!
-                 # Нужно проверить документацию MAX API или экспериментировать.
-                 # В maxapi InlineKeyboardBuilder.as_markup() возвращает Attachment, а не словарь напрямую.
-                 # Попробуем передать как attachments, но это может не сработать для edit.
-                 # ВАЖНО: messages.edit может не поддерживать редактирование клавиатуры!
-                 # payload["attachments"] = [keyboard] # <-- ПОКА НЕ РЕАЛИЗОВАНО для attachments в edit
-                 logger.warning("messages.edit может не поддерживать редактирование клавиатуры. Отправляем новое сообщение.")
-                 raise aiohttp.ClientResponseError(request_info=None, history=None, status=400, message="Cannot edit keyboard") # Искусственно вызываем ошибку, чтобы отправить новое сообщение
+            # ВАЖНО: messages.edit может НЕ ПОДДЕРЖИВАТЬ редактирование клавиатуры!
+            # Если нужно редактировать клавиатуру, возможно, нужно отправлять новое сообщение.
+            # Пока не передаём клавиатуру в edit, чтобы не вызвать ошибку.
+            # if keyboard:
+            #     payload["keyboard"] = keyboard # <-- Это может не работать или вызвать ошибку
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(api_url, json=payload, headers=headers) as response:
@@ -194,18 +189,20 @@ async def edit_last_message_or_send_new(bot, chat_id, user_id, text, keyboard=No
                     logger.debug(f"Ответ от messages.edit: {response_data}")
                     if response.status == 200 and response_data.get("success"):
                         logger.info(f"Сообщение {last_msg_id} в чате {chat_id} успешно отредактировано.")
-                        # ID сообщения не меняется при редактировании, НО если оно было отправлено заново, нужно обновить.
-                        # В данном случае, мы НЕ обновляем ID, так как редактировали старое.
+                        # ID сообщения не меняется при редактировании.
+                        # НО если в будущем MAX API будет возвращать новый ID при edit (редко),
+                        # его нужно будет сохранить снова.
+                        # await db.update_last_message_id(user_id, response_data.get('message_id', last_msg_id))
+                        # В большинстве случаев, старый ID остаётся валидным для следующего редактирования.
                         return True
                     else:
                         # Если редактирование не удалось, логируем ошибку и отправим новое сообщение
                         error_details = response_data.get("error", "Unknown error")
                         logger.warning(f"Редактирование сообщения {last_msg_id} не удалось ({response.status}): {error_details}")
-                        # Не сохраняем ID старого сообщения, т.к. оно не изменилось
-                        
+
         except aiohttp.ClientResponseError as e:
             logger.error(f"HTTP ошибка при редактировании сообщения: {e}")
-            # Скорее всего, сообщение не найдено или нельзя отредактировать (например, клавиатуру)
+            # Скорее всего, сообщение не найдено или нельзя отредактировать
         except Exception as e:
             logger.error(f"Неожиданная ошибка при редактировании сообщения: {e}")
 
@@ -213,11 +210,14 @@ async def edit_last_message_or_send_new(bot, chat_id, user_id, text, keyboard=No
     logger.info(f"Отправляем новое сообщение в чат {chat_id} для user_id {user_id} (редактирование не удалось или ID не было).")
     attachments_to_send = [keyboard] if keyboard else []
     try:
-        sent_message = await edit_last_message_or_send_new(chat_id=chat_id, text=text, attachments=attachments_to_send)
+        # ИСПРАВЛЕНО: используем правильные именованные аргументы для bot.send_message
+        # Согласно maxapi, attachments передаётся как attachments, а не как attachment
+        sent_message = await bot.send_message(chat_id=chat_id, text=text, attachments=attachments_to_send)
         # Сохраняем ID *нового* отправленного сообщения в БД
         new_message_id = getattr(sent_message, 'message_id', None) # Проверь, как maxapi возвращает ID
         if new_message_id:
             await db.update_last_message_id(user_id, str(new_message_id)) # Сохраняем в БД
+            logger.info(f"Сохранён ID нового сообщения {new_message_id} для user_id {user_id}")
         else:
             logger.warning(f"Не удалось получить ID отправленного сообщения в чат {chat_id} для user_id {user_id}.")
         return sent_message
@@ -225,14 +225,16 @@ async def edit_last_message_or_send_new(bot, chat_id, user_id, text, keyboard=No
         logger.error(f"Ошибка отправки нового сообщения: {e}")
         # Fallback без клавиатуры
         try:
-            sent_message = await edit_last_message_or_send_new(chat_id=chat_id, text=text)
+            sent_message = await bot.send_message(chat_id=chat_id, text=text)
             new_message_id = getattr(sent_message, 'message_id', None)
             if new_message_id:
                 await db.update_last_message_id(user_id, str(new_message_id))
+                logger.info(f"Сохранён ID fallback-сообщения {new_message_id} для user_id {user_id}")
             return sent_message
         except Exception as fallback_e:
             logger.error(f"Ошибка при отправке fallback-сообщения: {fallback_e}")
             return None
+
 
 async def send_main_menu(bot_instance, chat_id, text, keyboard=None):
     """Отправляет основное меню - всегда одно сообщение с кнопками"""
@@ -529,69 +531,157 @@ async def bot_started(event: BotStarted):
         await db.save_user_data(event.user)
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя: {e}")
-    
-    await handle_start_response(event, '🧠 Привет! Я MAX Мозг - интеллектуальный ассистент. Нажмите кнопку для начала работы.')
+
+    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+    keyboard = await get_start_keyboard()
+    # Нужно получить user_id из event
+    # Для BotStarted event.user.user_id
+    user_id = event.user.user_id
+    await edit_last_message_or_send_new(
+        bot=event.bot,
+        chat_id=event.chat_id,
+        user_id=user_id, # <-- Передаём user_id
+        text='🧠 Привет! Я MAX Мозг - интеллектуальный ассистент. Нажмите кнопку для начала работы.',
+        keyboard=keyboard
+    )
 
 @dp.message_created(Command('start'))
 async def handle_start(event: MessageCreated):
     user_id = event.message.sender.user_id
     logger.info(f"Команда /start от user_id {user_id}")
-    
+
     try:
         await db.save_user_data(event.message.sender, event.message.body.text)
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя: {e}")
-    
-    await handle_start_response(event)
+
+    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+    keyboard = await get_start_keyboard()
+    await edit_last_message_or_send_new(
+        bot=event.bot,
+        chat_id=event.message.recipient.chat_id,
+        user_id=user_id, # <-- Передаём user_id
+        text='🧠 Привет! Я MAX Мозг - интеллектуальный ассистент. Нажмите кнопку для начала работы.',
+        keyboard=keyboard
+    )
 
 @dp.message_created()
 async def handle_message(event: MessageCreated):
     user_id = event.message.sender.user_id
     text = event.message.body.text
-    
+
     logger.info(f"Сообщение от user_id {user_id}: '{text}'")
-    
+
     try:
         await db.save_user_data(event.message.sender, text)
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя: {e}")
-    
+
     text_lower = text.lower().strip()
-    
+
     # Обработка отзыва
     if text_lower.startswith('отзыв:'):
         feedback_text = text_lower.replace('отзыв:', '', 1).strip()
         if feedback_text:
             logger.info(f"Отзыв от user_id {user_id}: {feedback_text}")
-            await send_temporary_message(event.bot, event.message.recipient.chat_id, "✅ Спасибо за ваш отзыв!")
-        # После отзыва показываем главное меню
-        keyboard = await get_main_menu_keyboard(event)
-        await edit_last_message_or_send_new(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="✅ Спасибо за ваш отзыв! Мы его обязательно рассмотрим.",
+                keyboard=None # <-- Временное сообщение без клавиатуры
+            )
+            # Затем снова показываем главное меню
+            keyboard = await get_main_menu_keyboard(event)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="Что вы хотите сделать дальше?",
+                keyboard=keyboard
+            )
+        else:
+            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="❌ Пожалуйста, укажите текст отзыва после 'отзыв:'.",
+                keyboard=None # <-- Временное сообщение без клавиатуры
+            )
+            # Затем снова показываем главное меню
+            keyboard = await get_main_menu_keyboard(event)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="Что вы хотите сделать дальше?",
+                keyboard=keyboard
+            )
         return
-    
+
     # Обработка команды "мойпрофиль"
     if text_lower in ['мойпрофиль', 'профиль', 'profile', 'мой профиль']:
         try:
             profile_text = await get_user_profile_text(user_id)
-            # Показываем профиль как временное сообщение, затем главное меню
-            await send_temporary_message(event.bot, event.message.recipient.chat_id, profile_text)
+            # Показываем профиль, обновив текущее сообщение или отправив новое
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text=profile_text,
+                keyboard=None # <-- Показываем профиль без клавиатуры
+            )
+            # Затем снова показываем главное меню
             keyboard = await get_main_menu_keyboard(event)
-            await edit_last_message_or_send_new(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="Что вы хотите сделать дальше?",
+                keyboard=keyboard
+            )
         except Exception as e:
             logger.error(f"Ошибка получения профиля: {e}")
-            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
+            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="❌ Ошибка при загрузке профиля",
+                keyboard=None # <-- Временное сообщение без клавиатуры
+            )
+            # Затем снова показываем главное меню
+            keyboard = await get_main_menu_keyboard(event)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="Что вы хотите сделать дальше?",
+                keyboard=keyboard
+            )
         return
-    
+
     # Обработка команды выбора роли
     if text_lower in ['роли', 'роль', 'roles', 'role', 'выбор роли']:
-        await handle_role_selection(event)
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+        await handle_role_selection(event) # <-- Этот обработчик должен сам вызывать edit_last_message_or_send_new
         return
-    
+
     # Обработка основных команд
     if any(cmd in text_lower for cmd in ['start', 'меню', 'начать', 'max', 'макс']):
-        await handle_start_response(event)
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+        keyboard = await get_start_keyboard()
+        await edit_last_message_or_send_new(
+            bot=event.bot,
+            chat_id=event.message.recipient.chat_id,
+            user_id=user_id, # <-- Передаём user_id
+            text='🧠 Привет! Я MAX Мозг - интеллектуальный ассистент. Нажмите кнопку для начала работы.',
+            keyboard=keyboard
+        )
         return
-    
+
     # Поиск команды в словаре обработчиков
     for command, handler in COMMAND_HANDLERS.items():
         if command in text_lower or text_lower == command:
@@ -600,24 +690,63 @@ async def handle_message(event: MessageCreated):
                     response_text = await handler()
                 else:
                     response_text = handler()
-                
+
                 # Для команды роли показываем клавиатуру выбора
                 if command in ['роли', 'roles']:
-                    await handle_role_selection(event)
+                    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+                    await handle_role_selection(event) # <-- Этот обработчик должен сам вызывать edit_last_message_or_send_new
                 else:
                     # Для других команд показываем временное сообщение и главное меню
-                    await send_temporary_message(event.bot, event.message.recipient.chat_id, response_text)
+                    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+                    await edit_last_message_or_send_new(
+                        bot=event.bot,
+                        chat_id=event.message.recipient.chat_id,
+                        user_id=user_id, # <-- Передаём user_id
+                        text=response_text,
+                        keyboard=None # <-- Временное сообщение без клавиатуры
+                    )
+                    # Затем снова показываем главное меню
                     keyboard = await get_main_menu_keyboard(event)
-                    await edit_last_message_or_send_new(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+                    await edit_last_message_or_send_new(
+                        bot=event.bot,
+                        chat_id=event.message.recipient.chat_id,
+                        user_id=user_id, # <-- Передаём user_id
+                        text="Что вы хотите сделать дальше?",
+                        keyboard=keyboard
+                    )
                 return
             except Exception as e:
                 logger.error(f"Ошибка обработки команды {command}: {e}")
-                await handle_start_response(event)
+                # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+                await edit_last_message_or_send_new(
+                    bot=event.bot,
+                    chat_id=event.message.recipient.chat_id,
+                    user_id=user_id, # <-- Передаём user_id
+                    text="❌ Произошла ошибка при обработке команды.",
+                    keyboard=None # <-- Временное сообщение без клавиатуры
+                )
+                # Затем снова показываем главное меню
+                keyboard = await get_main_menu_keyboard(event)
+                await edit_last_message_or_send_new(
+                    bot=event.bot,
+                    chat_id=event.message.recipient.chat_id,
+                    user_id=user_id, # <-- Передаём user_id
+                    text="Что вы хотите сделать дальше?",
+                    keyboard=keyboard
+                )
                 return
-    
-    # Если команда не распознана, показываем начальный экран
-    await handle_start_response(event, "🤔 Не понял вашу команду. Нажмите кнопку для работы с MAX Мозг.")
 
+    # Если команда не распознана, показываем начальный экран
+    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+    keyboard = await get_start_keyboard()
+    await edit_last_message_or_send_new(
+        bot=event.bot,
+        chat_id=event.message.recipient.chat_id,
+        user_id=user_id, # <-- Передаём user_id
+        text="🤔 Не понял вашу команду. Нажмите кнопку для работы с MAX Мозг.",
+        keyboard=keyboard
+    )
+    
 # --- Админ-команды обработчики ---
 @dp.message_created(Command('status'))
 async def handle_admin_status_command(event: MessageCreated):
@@ -718,40 +847,41 @@ async def handle_callback(event: MessageCallback):
     """Обрабатывает нажатия на inline-кнопки для MAX Мозг."""
     user_id = event.callback.user.user_id
     payload = event.callback.payload
-    
+
     logger.info(f"Callback от user_id {user_id}: {payload}")
-    
+
     try:
         await db.save_user_data(event.callback.user)
     except Exception as e:
         logger.error(f"Ошибка сохранения пользователя: {e}")
-    
+
     # Обработка начала работы
     if payload == "start":
-        await handle_role_selection(event)
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+        await handle_role_selection(event) # <-- Этот обработчик должен сам вызывать edit_last_message_or_send_new
         return
-    
+
     # Обработка выбора ролей
     role_mapping = {
         "role_applicant": "абитуриент",
-        "role_student": "студент", 
+        "role_student": "студент",
         "role_worker": "работник",
         "role_admin": "администрация",
         "role_guest": "гость"
     }
-    
+
     if payload in role_mapping:
         role_name = role_mapping[payload]
         logger.info(f"Пользователь {user_id} выбрал роль: {role_name}")
-        
+
         try:
             # Для АДМИНИСТРАТОРОВ всегда разрешаем смену роли
             # Для обычных пользователей блокируем смену не-гостевых ролей
             allow_role_change = (user_id in ADMIN_IDS) or (role_name == 'гость')
-            
+
             # Сохраняем роль с настройками блокировки
             await db.update_user_role(user_id, role_name, allow_role_change)
-            
+
             # Обновляем статус пользователя
             await db.update_user_status(
                 user_id=user_id,
@@ -759,7 +889,7 @@ async def handle_callback(event: MessageCallback):
                 changed_by="user_choice",
                 reason=f"Пользователь выбрал роль: {role_name}"
             )
-            
+
             # Логируем доступ к мини-приложению
             await db.log_mini_app_access(user_id, {
                 'first_name': event.callback.user.first_name,
@@ -767,7 +897,7 @@ async def handle_callback(event: MessageCallback):
                 'username': event.callback.user.username,
                 'selected_role': role_name
             })
-            
+
             # Если роль требует подтверждения и пользователь не администратор
             if role_name in ROLES_REQUIRING_APPROVAL and user_id not in ADMIN_IDS:
                 # Уведомляем администраторов
@@ -777,78 +907,73 @@ async def handle_callback(event: MessageCallback):
             else:
                 # Для гостевой роли или администратора сразу даем доступ
                 await handle_role_approved(event, role_name)
-                
+
         except Exception as e:
             logger.error(f"Ошибка сохранения роли пользователя: {e}")
-            await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при выборе роли")
-        return
-    
-    # Обработка смены роли
-    if payload == "change_role":
-        await handle_role_selection(event)
-        return
-    
-    # Обработка поддержки (ОБНОВЛЕНО - отправка QR-кода)
-    if payload == "support":
-        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-        
-        # Генерируем QR-код
-        qr_code = await generate_qr_code(MAX_PROFILE_URL)
-        
-        if qr_code:
-            try:
-                # Отправляем QR-код
-                success = await send_qr_code(event.bot, chat_id, qr_code, "🧠 QR-код для связи с администратором\n\nОтсканируйте код чтобы перейти в мой профиль MAX")
-                
-                if not success:
-                    # Fallback: если не удалось отправить QR-код
-                    await send_temporary_message(
-                        event.bot, 
-                        chat_id, 
-                        f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
-                    )
-                    
-            except Exception as e:
-                logger.error(f"Ошибка отправки QR-кода: {e}")
-                # Fallback: отправляем ссылку
-                await send_temporary_message(
-                    event.bot, 
-                    chat_id, 
-                    f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
-                )
-        else:
-            # Если не удалось сгенерировать QR-код
-            await send_temporary_message(
-                event.bot, 
-                chat_id, 
-                f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
+            # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="❌ Ошибка при выборе роли",
+                keyboard=None # <-- Временное сообщение без клавиатуры
             )
-        
-        # Показываем главное меню
-        keyboard = await get_main_menu_keyboard(event)
-        await edit_last_message_or_send_new(event.bot, chat_id, "Чем еще могу помочь?", keyboard)
+            # Затем снова показываем главное меню
+            keyboard = await get_main_menu_keyboard(event)
+            await edit_last_message_or_send_new(
+                bot=event.bot,
+                chat_id=event.message.recipient.chat_id,
+                user_id=user_id, # <-- Передаём user_id
+                text="Что вы хотите сделать дальше?",
+                keyboard=keyboard
+            )
         return
-    
-    # Обработка возврата в главное меню
+
+    # Обновляем главное меню
     if payload == "back_to_menu":
-        chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
         keyboard = await get_main_menu_keyboard(event)
-        await send_keyboard_message(event.bot, chat_id, "Главное меню MAX Мозг:", keyboard)
+        await edit_last_message_or_send_new(
+            bot=event.bot,
+            chat_id=event.message.recipient.chat_id,
+            user_id=user_id, # <-- Передаём user_id
+            text="Главное меню MAX Мозг:",
+            keyboard=keyboard
+        )
         return
-    
+
     # Обработка открытия приложения (fallback)
     if payload == "open_max_app":
-        web_app_url = "  https://artemfair5-design.github.io/university-assistant-bot/auth.html  "
-        await send_temporary_message(event.bot, event.message.recipient.chat_id, 
-                          f"🧠 Открыть MAX Мозг: {web_app_url}")
+        web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/"
+        # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ (без клавиатуры для временного сообщения)
+        await edit_last_message_or_send_new(
+            bot=event.bot,
+            chat_id=event.message.recipient.chat_id,
+            user_id=user_id, # <-- Передаём user_id
+            text=f"🧠 Открыть MAX Мозг: {web_app_url}",
+            keyboard=None # <-- Временное сообщение без клавиатуры
+        )
+        # Затем снова показываем главное меню
+        keyboard = await get_main_menu_keyboard(event)
+        await edit_last_message_or_send_new(
+            bot=event.bot,
+            chat_id=event.message.recipient.chat_id,
+            user_id=user_id, # <-- Передаём user_id
+            text="Что вы хотите сделать дальше?",
+            keyboard=keyboard
+        )
         return
-    
-    # Обработка ожидания подтверждения
-    if payload == "pending_approval":
-        user_info = await db.get_user_info(user_id)
-        current_role = user_info.get('selected_role', 'гость')
-        await handle_role_pending_approval(event, current_role)
-        return
+
+    # Если payload неизвестен
+    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
+    keyboard = await get_main_menu_keyboard(event)
+    await edit_last_message_or_send_new(
+        bot=event.bot,
+        chat_id=event.message.recipient.chat_id,
+        user_id=user_id, # <-- Передаём user_id
+        text="🤔 Неизвестная команда. Используйте кнопки меню.",
+        keyboard=keyboard
+    )
 
 # --- Функции для стабильности (НОВЫЕ) ---
 

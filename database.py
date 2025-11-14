@@ -1,8 +1,9 @@
+# database.py
 import asyncpg
 import os
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 
 logger = logging.getLogger(__name__)
@@ -10,12 +11,12 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
-        
+
     async def connect(self):
         """Подключается к PostgreSQL в Docker"""
         try:
             self.pool = await asyncpg.create_pool(
-                host=os.getenv('DB_HOST', 'localhost'),
+                host=os.getenv('DB_HOST', 'db'), # <-- Для Docker Compose используем имя сервиса 'db'
                 port=int(os.getenv('DB_PORT', 5432)),
                 user=os.getenv('DB_USER', 'botuser'),
                 password=os.getenv('DB_PASSWORD', 'botpass'),
@@ -27,6 +28,7 @@ class Database:
             await self.init_db()
         except Exception as e:
             logger.error(f"Ошибка подключения к PostgreSQL: {e}")
+            logger.info("Убедитесь, что PostgreSQL запущен в Docker: docker-compose up -d")
             raise
 
     async def init_db(self):
@@ -63,10 +65,10 @@ class Database:
                     last_message_id TEXT
                 )
             ''')
-            
+
             # Добавляем ВСЕ недостающие колонки
             await self._add_missing_columns(conn)
-            
+
             # Таблица отзывов
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS feedback (
@@ -76,7 +78,7 @@ class Database:
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             ''')
-            
+
             # Таблица активности (расширенная)
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS user_activity (
@@ -87,7 +89,7 @@ class Database:
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             ''')
-            
+
             # Таблица статусов пользователей
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS user_status_history (
@@ -100,10 +102,10 @@ class Database:
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             ''')
-            
+
             # Создаем индексы с обработкой ошибок
             await self._create_indexes(conn)
-            
+
             logger.info("Таблицы базы данных MAX Мозг инициализированы")
 
     async def _add_missing_columns(self, conn):
@@ -118,13 +120,15 @@ class Database:
             ('role_approved', 'BOOLEAN DEFAULT FALSE'),
             ('role_change_allowed', 'BOOLEAN DEFAULT TRUE'),
             ('role_selected_at', 'TIMESTAMP WITH TIME ZONE'),
-            ('admin_verified', 'BOOLEAN DEFAULT FALSE')
+            ('admin_verified', 'BOOLEAN DEFAULT FALSE'),
+            # НОВАЯ КОЛОНКА ДЛЯ ХРАНЕНИЯ ПОСЛЕДНЕГО MESSAGE_ID
+            ('last_message_id', 'TEXT')
         ]
-        
+
         for column_name, column_type in columns_to_add:
             try:
                 await conn.execute(f'''
-                    ALTER TABLE users 
+                    ALTER TABLE users
                     ADD COLUMN IF NOT EXISTS {column_name} {column_type}
                 ''')
                 logger.info(f"Колонка {column_name} добавлена или уже существует")
@@ -139,49 +143,38 @@ class Database:
             ('idx_activity_user_id', 'user_activity(user_id)'),
             ('idx_status_history_user_id', 'user_status_history(user_id)'),
             ('idx_users_selected_role', 'users(selected_role)'),
-            ('idx_users_role_approved', 'users(role_approved)')
+            ('idx_users_role_approved', 'users(role_approved)'),
+            ('idx_users_applicant', 'users(is_applicant)'), # <-- Индекс для is_applicant
+            ('idx_users_status', 'users(user_status)'),     # <-- Индекс для user_status
+            # НОВЫЙ ИНДЕКС ДЛЯ last_message_id (опционально, может быть полезен для отладки)
+            ('idx_users_last_message_id', 'users(last_message_id)')
         ]
-        
-        # Индексы для новых колонок (могут не существовать сначала)
-        optional_indexes = [
-            ('idx_users_applicant', 'users(is_applicant)'),
-            ('idx_users_status', 'users(user_status)')
-        ]
-        
-        # Создаем основные индексы
+
         for index_name, index_def in indexes:
             try:
                 await conn.execute(f'CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}')
                 logger.info(f"Индекс {index_name} создан или уже существует")
             except Exception as e:
-                logger.warning(f"Не удалось создать индекс {index_name}: {e}")
-        
-        # Пытаемся создать опциональные индексы (могут упасть если колонки нет)
-        for index_name, index_def in optional_indexes:
-            try:
-                await conn.execute(f'CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}')
-                logger.info(f"Индекс {index_name} создан или уже существует")
-            except Exception as e:
-                logger.warning(f"Не удалось создать индекс {index_name} (колонка может отсутствовать): {e}")
+                logger.warning(f"Не удалось создить индекс {index_name}: {e}")
 
     async def save_user_data(self, user_info, message_text: str = None):
         """Сохраняет или обновляет данные пользователя"""
         current_time = datetime.now()
-        
+
         user_id = user_info.user_id
         first_name = getattr(user_info, 'first_name', '') or ''
         last_name = getattr(user_info, 'last_name', '') or ''
         username = getattr(user_info, 'username', '') or ''
         telegram_username = f"@{username}" if username else ''
-        
+
         async with self.pool.acquire() as conn:
             # Используем INSERT ... ON CONFLICT для атомарной вставки/обновления
             await conn.execute('''
-                INSERT INTO users 
-                (user_id, first_name, last_name, username, telegram, max_username, 
+                INSERT INTO users
+                (user_id, first_name, last_name, username, telegram, max_username,
                  registration_date, last_activity, message_count)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)
-                ON CONFLICT (user_id) 
+                ON CONFLICT (user_id)
                 DO UPDATE SET
                     first_name = EXCLUDED.first_name,
                     last_name = EXCLUDED.last_name,
@@ -193,11 +186,11 @@ class Database:
                     updated_at = NOW()
             ''', user_id, first_name, last_name, username, telegram_username,
                username, current_time, current_time)
-            
+
             # Анализируем сообщение если есть
             if message_text:
                 await self._analyze_message_for_data(conn, user_id, message_text)
-            
+
             # Сохраняем активность
             await conn.execute('''
                 INSERT INTO user_activity (user_id, activity_type, activity_data)
@@ -207,9 +200,9 @@ class Database:
     async def _analyze_message_for_data(self, conn, user_id: int, message_text: str):
         """Анализирует сообщение для извлечения дополнительных данных"""
         import re
-        
+
         text_lower = message_text.lower()
-        
+
         # Поиск email
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
         emails = re.findall(email_pattern, message_text)
@@ -218,7 +211,7 @@ class Database:
                 'UPDATE users SET email = $1, updated_at = NOW() WHERE user_id = $2',
                 emails[0], user_id
             )
-        
+
         # Поиск номера телефона
         phone_pattern = r'[\+]?[7-8]?[\s\-]?\(?[0-9]{3}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}'
         phones = re.findall(phone_pattern, message_text)
@@ -227,7 +220,7 @@ class Database:
                 'UPDATE users SET phone = $1, updated_at = NOW() WHERE user_id = $2',
                 phones[0].strip(), user_id
             )
-        
+
         # Сохраняем отзыв
         if text_lower.startswith('отзыв:'):
             feedback_text = text_lower.replace('отзыв:', '', 1).strip()
@@ -242,14 +235,14 @@ class Database:
         async with self.pool.acquire() as conn:
             try:
                 current_time = datetime.now()
-                
+
                 # Для гостевой роли всегда разрешаем смену, для остальных - по настройке
                 is_guest = role_name == 'гость'
                 final_allow_change = allow_change if not is_guest else True
-                
+
                 await conn.execute('''
-                    UPDATE users 
-                    SET selected_role = $1, 
+                    UPDATE users
+                    SET selected_role = $1,
                         role_change_allowed = $2,
                         role_selected_at = $3,
                         role_approved = $4,
@@ -257,9 +250,9 @@ class Database:
                         updated_at = NOW()
                     WHERE user_id = $5
                 ''', role_name, final_allow_change, current_time, is_guest, user_id)
-                
+
                 logger.info(f"Роль пользователя {user_id} обновлена: {role_name}, смена разрешена: {final_allow_change}")
-                
+
             except Exception as e:
                 logger.error(f"Ошибка обновления роли пользователя: {e}")
                 raise
@@ -269,21 +262,21 @@ class Database:
         async with self.pool.acquire() as conn:
             try:
                 await conn.execute('''
-                    UPDATE users 
+                    UPDATE users
                     SET role_approved = TRUE,
                         admin_verified = TRUE,
                         updated_at = NOW()
                     WHERE user_id = $1
                 ''', user_id)
-                
+
                 # Логируем в историю статусов
                 await conn.execute('''
                     INSERT INTO user_status_history (user_id, old_status, new_status, changed_by, reason)
                     VALUES ($1, $2, $3, $4, $5)
                 ''', user_id, 'pending', 'approved', approved_by, 'Роль подтверждена администратором')
-                
+
                 logger.info(f"Роль пользователя {user_id} подтверждена администратором")
-                
+
             except Exception as e:
                 logger.error(f"Ошибка подтверждения роли: {e}")
                 raise
@@ -308,14 +301,14 @@ class Database:
                 result = await conn.fetchrow('''
                     SELECT selected_role, role_approved FROM users WHERE user_id = $1
                 ''', user_id)
-                
+
                 if not result:
                     return False
-                    
+
                 # Если роль гость - автоматически подтверждена
                 if result['selected_role'] == 'гость':
                     return True
-                    
+
                 return bool(result['role_approved'])
             except Exception as e:
                 logger.warning(f"Ошибка проверки подтверждения роли: {e}")
@@ -326,12 +319,12 @@ class Database:
         async with self.pool.acquire() as conn:
             try:
                 row = await conn.fetchrow('''
-                    SELECT selected_role, role_approved, role_change_allowed, 
+                    SELECT selected_role, role_approved, role_change_allowed,
                            role_selected_at, admin_verified, user_status
-                    FROM users 
+                    FROM users
                     WHERE user_id = $1
                 ''', user_id)
-                
+
                 if row:
                     return dict(row)
                 return {}
@@ -342,38 +335,38 @@ class Database:
     async def log_mini_app_access(self, user_id: int, user_data: Dict[str, Any] = None):
         """Логирует доступ пользователя к мини-приложению MAX Мозг"""
         current_time = datetime.now()
-        
+
         async with self.pool.acquire() as conn:
             try:
                 # Обновляем счетчик доступа и время последнего доступа
                 await conn.execute('''
-                    UPDATE users 
-                    SET last_mini_app_access = $1, 
+                    UPDATE users
+                    SET last_mini_app_access = $1,
                         mini_app_access_count = COALESCE(mini_app_access_count, 0) + 1,
                         updated_at = NOW()
                     WHERE user_id = $2
                 ''', current_time, user_id)
-                
+
                 # Сохраняем выбранную роль если есть
                 if user_data and 'selected_role' in user_data:
                     await conn.execute('''
-                        UPDATE users 
+                        UPDATE users
                         SET selected_role = $1, updated_at = NOW()
                         WHERE user_id = $2
                     ''', user_data['selected_role'], user_id)
-                
+
                 # Логируем активность
                 activity_data = json.dumps({
                     'user_data': user_data,
                     'access_type': 'max_mozg_app',
                     'platform': 'MAX Мозг'
                 }) if user_data else None
-                
+
                 await conn.execute('''
                     INSERT INTO user_activity (user_id, activity_type, activity_data)
                     VALUES ($1, 'max_app_access', $2)
                 ''', user_id, activity_data)
-                
+
                 logger.info(f"Логирован доступ к MAX Мозг для user_id {user_id}")
             except Exception as e:
                 logger.warning(f"Не удалось залогировать доступ к MAX Мозг: {e}")
@@ -386,20 +379,20 @@ class Database:
                 old_status = await conn.fetchval(
                     'SELECT user_status FROM users WHERE user_id = $1', user_id
                 )
-                
+
                 # Обновляем статус
                 await conn.execute('''
-                    UPDATE users 
+                    UPDATE users
                     SET user_status = $1, updated_at = NOW()
                     WHERE user_id = $2
                 ''', new_status, user_id)
-                
+
                 # Сохраняем в историю
                 await conn.execute('''
                     INSERT INTO user_status_history (user_id, old_status, new_status, changed_by, reason)
                     VALUES ($1, $2, $3, $4, $5)
                 ''', user_id, old_status, new_status, changed_by, reason)
-                
+
                 # Логируем активность
                 activity_data = json.dumps({
                     'old_status': old_status,
@@ -408,12 +401,12 @@ class Database:
                     'reason': reason,
                     'platform': 'MAX Мозг'
                 })
-                
+
                 await conn.execute('''
                     INSERT INTO user_activity (user_id, activity_type, activity_data)
                     VALUES ($1, 'status_change', $2)
                 ''', user_id, activity_data)
-                
+
                 logger.info(f"Статус пользователя {user_id} изменен в MAX Мозг: {old_status} -> {new_status}")
             except Exception as e:
                 logger.warning(f"Не удалось обновить статус пользователя: {e}")
@@ -430,40 +423,20 @@ class Database:
             except Exception as e:
                 logger.warning(f"Не удалось обновить статус абитуриента: {e}")
 
-    async def get_user_info(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Получает информацию о пользователе"""
-        async with self.pool.acquire() as conn:
-            try:
-                row = await conn.fetchrow('''
-                    SELECT user_id, first_name, last_name, username, user_status, 
-                           is_applicant, selected_role, mini_app_access_count, 
-                           last_mini_app_access, registration_date, message_count,
-                           role_approved, role_change_allowed, admin_verified
-                    FROM users 
-                    WHERE user_id = $1
-                ''', user_id)
-                
-                if row:
-                    return dict(row)
-                return None
-            except Exception as e:
-                logger.warning(f"Не удалось получить информацию о пользователе {user_id}: {e}")
-                return None
-
+    # --- НОВЫЕ МЕТОДЫ: Обновление и получение last_message_id ---
     async def update_last_message_id(self, user_id: int, message_id: str):
         """Сохраняет ID последнего отправленного ботом сообщения для пользователя (чата)."""
         async with self.pool.acquire() as conn:
             try:
                 await conn.execute('''
-                    UPDATE users 
+                    UPDATE users
                     SET last_message_id = $1, updated_at = NOW()
                     WHERE user_id = $2
                 ''', message_id, user_id)
-                logger.info(f"Сохранён ID последнего сообщения для user_id {user_id}: {message_id}")
+                logger.debug(f"Сохранён ID последнего сообщения для user_id {user_id}: {message_id}")
             except Exception as e:
                 logger.error(f"Ошибка сохранения last_message_id в БД: {e}")
 
-    # --- НОВЫЙ МЕТОД: Получение последнего message_id ---
     async def get_last_message_id(self, user_id: int) -> Optional[str]:
         """Получает ID последнего отправленного ботом сообщения для пользователя (чата)."""
         async with self.pool.acquire() as conn:
@@ -476,6 +449,28 @@ class Database:
             except Exception as e:
                 logger.error(f"Ошибка получения last_message_id из БД: {e}")
                 return None
+    # --- Конец новых методов ---
+
+    async def get_user_info(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Получает информацию о пользователе"""
+        async with self.pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow('''
+                    SELECT user_id, first_name, last_name, username, user_status,
+                           is_applicant, selected_role, mini_app_access_count,
+                           last_mini_app_access, registration_date, message_count,
+                           role_approved, role_change_allowed, admin_verified,
+                           last_message_id -- <-- Добавляем last_message_id
+                    FROM users
+                    WHERE user_id = $1
+                ''', user_id)
+
+                if row:
+                    return dict(row)
+                return None
+            except Exception as e:
+                logger.warning(f"Не удалось получить информацию о пользователе {user_id}: {e}")
+                return None
 
     async def get_user_stats(self) -> Dict[str, Any]:
         """Получает общую статистику для MAX Мозг"""
@@ -484,57 +479,57 @@ class Database:
                 total_users = await conn.fetchval('SELECT COUNT(*) FROM users')
                 total_feedback = await conn.fetchval('SELECT COUNT(*) FROM feedback')
                 total_messages = await conn.fetchval('SELECT COALESCE(SUM(message_count), 0) FROM users')
-                
+
                 # Пытаемся получить дополнительные статистики
                 applicant_users = 0
                 mini_app_users = 0
                 approved_users = 0
                 status_stats = {}
                 role_stats = {}
-                
+
                 try:
                     applicant_users = await conn.fetchval('SELECT COUNT(*) FROM users WHERE is_applicant = TRUE')
                 except Exception:
                     pass
-                
+
                 try:
                     mini_app_users = await conn.fetchval('SELECT COUNT(*) FROM users WHERE mini_app_access_count > 0')
                 except Exception:
                     pass
-                
+
                 try:
                     approved_users = await conn.fetchval('SELECT COUNT(*) FROM users WHERE role_approved = TRUE')
                 except Exception:
                     pass
-                
+
                 try:
                     status_stats_rows = await conn.fetch('''
-                        SELECT user_status, COUNT(*) as count 
-                        FROM users 
-                        WHERE user_status IS NOT NULL 
+                        SELECT user_status, COUNT(*) as count
+                        FROM users
+                        WHERE user_status IS NOT NULL
                         GROUP BY user_status
                     ''')
                     status_stats = {row['user_status']: row['count'] for row in status_stats_rows}
                 except Exception:
                     pass
-                
+
                 try:
                     role_stats_rows = await conn.fetch('''
-                        SELECT selected_role, COUNT(*) as count 
-                        FROM users 
-                        WHERE selected_role IS NOT NULL 
+                        SELECT selected_role, COUNT(*) as count
+                        FROM users
+                        WHERE selected_role IS NOT NULL
                         GROUP BY selected_role
                     ''')
                     role_stats = {row['selected_role']: row['count'] for row in role_stats_rows}
                 except Exception:
                     pass
-                
+
                 # Активные пользователи за последние 7 дней
                 active_users = await conn.fetchval('''
-                    SELECT COUNT(DISTINCT user_id) FROM user_activity 
+                    SELECT COUNT(DISTINCT user_id) FROM user_activity
                     WHERE created_at >= NOW() - INTERVAL '7 days'
                 ''')
-                
+
                 return {
                     'total_users': total_users,
                     'total_feedback': total_feedback,
@@ -564,7 +559,7 @@ class Database:
         """Закрывает соединение с базой данных"""
         if self.pool:
             await self.pool.close()
-            logger.info("Соединение с PostgreSQL для MAX Мозг закрыто")
+            logger.info("Соединение с PostgreSQL закрыто")
 
 # Глобальный экземпляр базы данных
 db = Database()
