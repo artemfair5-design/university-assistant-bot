@@ -48,7 +48,19 @@ class Database:
                     last_activity TIMESTAMP WITH TIME ZONE NOT NULL,
                     message_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    -- НОВЫЕ КОЛОНКИ ДЛЯ СИСТЕМЫ РОЛЕЙ (уже есть)
+                    is_applicant BOOLEAN,
+                    user_status TEXT DEFAULT 'student',
+                    last_mini_app_access TIMESTAMP WITH TIME ZONE,
+                    mini_app_access_count INTEGER DEFAULT 0,
+                    selected_role TEXT,
+                    role_approved BOOLEAN DEFAULT FALSE,
+                    role_change_allowed BOOLEAN DEFAULT TRUE,
+                    role_selected_at TIMESTAMP WITH TIME ZONE,
+                    admin_verified BOOLEAN DEFAULT FALSE,
+                    -- НОВАЯ КОЛОНКА ДЛЯ ХРАНЕНИЯ ПОСЛЕДНЕГО MESSAGE_ID
+                    last_message_id TEXT
                 )
             ''')
             
@@ -436,6 +448,33 @@ class Database:
                 return None
             except Exception as e:
                 logger.warning(f"Не удалось получить информацию о пользователе {user_id}: {e}")
+                return None
+
+    async def update_last_message_id(self, user_id: int, message_id: str):
+        """Сохраняет ID последнего отправленного ботом сообщения для пользователя (чата)."""
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    UPDATE users 
+                    SET last_message_id = $1, updated_at = NOW()
+                    WHERE user_id = $2
+                ''', message_id, user_id)
+                logger.info(f"Сохранён ID последнего сообщения для user_id {user_id}: {message_id}")
+            except Exception as e:
+                logger.error(f"Ошибка сохранения last_message_id в БД: {e}")
+
+    # --- НОВЫЙ МЕТОД: Получение последнего message_id ---
+    async def get_last_message_id(self, user_id: int) -> Optional[str]:
+        """Получает ID последнего отправленного ботом сообщения для пользователя (чата)."""
+        async with self.pool.acquire() as conn:
+            try:
+                last_msg_id = await conn.fetchval('''
+                    SELECT last_message_id FROM users WHERE user_id = $1
+                ''', user_id)
+                logger.debug(f"Получен ID последнего сообщения для user_id {user_id}: {last_msg_id}")
+                return last_msg_id
+            except Exception as e:
+                logger.error(f"Ошибка получения last_message_id из БД: {e}")
                 return None
 
     async def get_user_stats(self) -> Dict[str, Any]:
