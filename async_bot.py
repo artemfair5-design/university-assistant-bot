@@ -10,6 +10,7 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from maxapi.types.attachments.buttons.callback_button import CallbackButton
 from maxapi.types.attachments.buttons.message_button import MessageButton
 from maxapi.types.attachments.buttons.open_app_button import OpenAppButton # <-- Импортируем OpenAppButton
+from database import db
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
