@@ -68,6 +68,8 @@ async def edit_last_message(bot_instance, chat_id: int, new_text: str, keyboard=
         # Подготавливаем attachments если есть клавиатура
         attachments = [keyboard] if keyboard else None
         
+        logger.info(f"Пытаемся отредактировать сообщение {message_id} в чате {chat_id}")
+        
         # Создаем экземпляр EditMessage
         editor = EditMessage(
             bot=bot_instance,
@@ -93,9 +95,9 @@ async def edit_last_message(bot_instance, chat_id: int, new_text: str, keyboard=
         logger.error(f"Исключение при редактировании сообщения: {e}")
         return False
 
-# --- ОБНОВЛЕННЫЕ функции отправки сообщений ---
+# --- ИСПРАВЛЕННЫЕ функции отправки сообщений ---
 
-async def send_main_menu(bot_instance, chat_id, text, keyboard=None):
+async def update_main_menu(bot_instance, chat_id, text, keyboard=None):
     """Отправляет основное меню и сохраняет message_id"""
     try:
         attachments = [keyboard] if keyboard else []
@@ -105,29 +107,60 @@ async def send_main_menu(bot_instance, chat_id, text, keyboard=None):
             attachments=attachments
         )
         
-        # Сохраняем message_id отправленного сообщения
-        await save_last_message(chat_id, sent_message.message_id)
+        # ИСПРАВЛЕНИЕ: Правильно получаем message_id из ответа
+        if hasattr(sent_message, 'message_id'):
+            message_id = sent_message.message_id
+        elif hasattr(sent_message, 'id'):
+            message_id = sent_message.id
+        else:
+            # Пытаемся получить из любого доступного атрибута
+            logger.warning(f"Нестандартная структура ответа: {dir(sent_message)}")
+            # Сохраняем как есть, преобразуя в строку
+            message_id = str(sent_message)
         
-        logger.info(f"Главное меню отправлено в чат {chat_id}, message_id: {sent_message.message_id}")
+        # Сохраняем message_id отправленного сообщения
+        await save_last_message(chat_id, message_id)
+        
+        logger.info(f"Главное меню отправлено в чат {chat_id}, message_id: {message_id}")
         return sent_message
     except Exception as e:
         logger.error(f"Ошибка отправки главного меню: {e}")
         try:
             # Fallback без клавиатуры
             sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
-            await save_last_message(chat_id, sent_message.message_id)
+            
+            # Аналогично получаем message_id для fallback
+            if hasattr(sent_message, 'message_id'):
+                message_id = sent_message.message_id
+            elif hasattr(sent_message, 'id'):
+                message_id = sent_message.id
+            else:
+                message_id = str(sent_message)
+                
+            await save_last_message(chat_id, message_id)
             return sent_message
         except Exception as fallback_e:
             logger.error(f"Fallback тоже не сработал: {fallback_e}")
+            return None
 
 async def send_temporary_message(bot_instance, chat_id, text):
     """Отправляет временное сообщение и сохраняет message_id"""
     try:
         sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
-        await save_last_message(chat_id, sent_message.message_id)
+        
+        # ИСПРАВЛЕНИЕ: Правильно получаем message_id
+        if hasattr(sent_message, 'message_id'):
+            message_id = sent_message.message_id
+        elif hasattr(sent_message, 'id'):
+            message_id = sent_message.id
+        else:
+            message_id = str(sent_message)
+            
+        await save_last_message(chat_id, message_id)
         return sent_message
     except Exception as e:
         logger.error(f"Ошибка отправки временного сообщения: {e}")
+        return None
 
 async def send_keyboard_message(bot_instance, chat_id, text, keyboard):
     """Отправляет сообщение с клавиатурой и сохраняет message_id"""
@@ -137,10 +170,20 @@ async def send_keyboard_message(bot_instance, chat_id, text, keyboard):
             text=text, 
             attachments=[keyboard]
         )
-        await save_last_message(chat_id, sent_message.message_id)
+        
+        # ИСПРАВЛЕНИЕ: Правильно получаем message_id
+        if hasattr(sent_message, 'message_id'):
+            message_id = sent_message.message_id
+        elif hasattr(sent_message, 'id'):
+            message_id = sent_message.id
+        else:
+            message_id = str(sent_message)
+            
+        await save_last_message(chat_id, message_id)
         return sent_message
     except Exception as e:
         logger.error(f"Ошибка отправки сообщения с клавиатурой: {e}")
+        return None
 
 # --- ОБНОВЛЕННЫЕ обработчики с поддержкой редактирования ---
 
@@ -155,11 +198,52 @@ async def update_main_menu(bot_instance, chat_id, new_text, keyboard=None):
     if not success:
         # Если редактирование не удалось, отправляем новое сообщение
         logger.info(f"Редактирование не удалось, отправляем новое сообщение в чат {chat_id}")
-        return await send_main_menu(bot_instance, chat_id, new_text, keyboard)
+        return await update_main_menu(bot_instance, chat_id, new_text, keyboard)
     
     return True
 
-# --- Текстовые шаблоны (ОБНОВЛЕНЫ ДЛЯ MAX МОЗГ) ---
+# --- ИСПРАВЛЕННАЯ функция отправки QR-кода ---
+
+async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
+    """Отправляет QR-код через MAX API"""
+    try:
+        from maxapi.types.input_media import InputMediaBuffer
+
+        # ИСПРАВЛЕНИЕ: Правильное создание InputMediaBuffer
+        buffer_obj = InputMediaBuffer(
+            buffer=qr_code_bytes.getvalue(),
+            filename="qr_code.png"
+            # Параметр 'type' удален, так как он не нужен или неверный
+        )
+
+        upload_result = await bot_instance.upload_file_buffer(
+            buffer=buffer_obj,
+            filename="qr_code.png"
+            # type также удален здесь
+        )
+        
+        logger.info(f"Файл загружен: {upload_result}")
+        
+        # Отправляем сообщение с QR-кодом
+        sent_message = await bot_instance.send_message(
+            chat_id=chat_id,
+            text=caption,
+            attachments=[upload_result]
+        )
+        
+        # Сохраняем message_id этого сообщения
+        if hasattr(sent_message, 'message_id'):
+            await save_last_message(chat_id, sent_message.message_id)
+        elif hasattr(sent_message, 'id'):
+            await save_last_message(chat_id, sent_message.id)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки QR-кода: {e}")
+        return False
+
+# --- Текстовые шаблоны (без изменений) ---
 WELCOME_TEXT = """🧠 Добро пожаловать в MAX Мозг!
 
 Умная платформа для студентов, абитуриентов и сотрудников университета."""
@@ -226,9 +310,9 @@ MAX_ROLES = {
 ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
 
 # Прямая ссылка на профиль в MAX
-MAX_PROFILE_URL = "https://max.ru/u/f9LHodD0cOKjtP4JqI_7NVijOYB4HbrU9UeT3xlr7m76Mmz7CEgQUmEQLzE  "
+MAX_PROFILE_URL = "https://max.ru/u/f9LHodD0cOKjtP4JqI_7NVijOYB4HbrU9UeT3xlr7m76Mmz7CEgQUmEQLzE"
 
-# --- Универсальные функции (ОБНОВЛЕНЫ) ---
+# --- Универсальные функции (без изменений) ---
 async def get_start_keyboard():
     """Генерирует начальную клавиатуру для MAX Мозг."""
     builder = InlineKeyboardBuilder()
@@ -320,38 +404,7 @@ async def generate_qr_code(url):
         logger.error(f"Ошибка генерации QR-кода: {e}")
         return None
 
-async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
-    """Отправляет QR-код через MAX API"""
-    try:
-        from maxapi.types.input_media import InputMediaBuffer
-
-        buffer_obj = InputMediaBuffer(
-            buffer=qr_code_bytes.getvalue(),
-            filename="qr_code.png",
-            type="image"
-        )
-
-        upload_result = await bot_instance.upload_file_buffer(
-            buffer=buffer_obj,
-            filename="qr_code.png",
-            type="image"
-        )
-        
-        logger.info(f"Файл загружен: {upload_result}")
-        
-        await bot_instance.send_message(
-            chat_id=chat_id,
-            text=caption,
-            attachments=[upload_result]
-        )
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Ошибка отправки QR-кода: {e}")
-        return False
-
-# --- Вспомогательные функции (НОВЫЕ) ---
+# --- Вспомогательные функции ---
 async def handle_role_pending_approval(event, role_name):
     """Обрабатывает ожидание подтверждения роли"""
     role_display = MAX_ROLES.get(role_name, "Пользователь")
@@ -381,7 +434,7 @@ async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
         except Exception as e:
             logger.warning(f"Не удалось уведомить администратора {admin_id}: {e}")
 
-# --- Обработчики событий (ОБНОВЛЕНЫ с поддержкой редактирования) ---
+# --- Обработчики событий ---
 async def handle_start_response(event, response_text=None):
     """Обрабатывает начальный ответ для MAX Мозг."""
     keyboard = await get_start_keyboard()
@@ -443,7 +496,6 @@ async def handle_role_rejected(event):
     # Обновляем главное меню
     keyboard = await get_main_menu_keyboard(event, user_role="гость")
     await update_main_menu(event.bot, chat_id, ROLE_REJECTED, keyboard)
-
 # --- Словарь обработчиков команд (ОБНОВЛЕН) ---
 async def get_statistics_text():
     """Генерирует текст статистики для MAX Мозг"""
@@ -951,7 +1003,6 @@ async def graceful_shutdown():
     except Exception as e:
         logger.error(f"Ошибка при закрытии базы данных: {e}")
 
-# --- Основная функция ---
 async def main():
     # Подключаемся к базе данных
     max_retries_db = 5
@@ -983,7 +1034,23 @@ async def main():
         logger.warning(f"Не удалось удалить вебхуки: {e}")
     
     logger.info("Запуск бота MAX Мозг с long polling...")
-    await resilient_polling()
+    
+    # Запускаем polling
+    max_retries = 5
+    retry_delay = 30
+    
+    for attempt in range(max_retries):
+        try:
+            await dp.start_polling(bot)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка polling (попытка {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Перезапуск через {retry_delay} секунд...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Достигнут лимит перезапусков. Завершение работы.")
+                raise
 
 if __name__ == '__main__':
     try:
@@ -992,12 +1059,3 @@ if __name__ == '__main__':
         logger.info("Бот MAX Мозг остановлен по запросу пользователя")
     except Exception as e:
         logger.error(f"Критическая ошибка при работе бота MAX Мозг: {e}")
-    finally:
-        # Корректно закрываем соединения
-        try:
-            asyncio.run(graceful_shutdown())
-        except RuntimeError as e:
-            if "Event loop is closed" in str(e):
-                logger.warning("Event loop уже закрыт при попытке graceful_shutdown.")
-            else:
-                logger.error(f"Ошибка при завершении работы: {e}")
