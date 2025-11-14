@@ -7,6 +7,8 @@ from maxapi import Bot, Dispatcher
 from maxapi.types import BotStarted, Command, MessageCreated, OpenAppButton, MessageCallback
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from maxapi.types.attachments.buttons.callback_button import CallbackButton
+from maxapi.methods.edit_message import EditMessage
+from maxapi.types.errors import Error
 import aiohttp
 
 # Импортируем нашу базу данных
@@ -22,6 +24,140 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv('MAX_TOKEN', 'f9LHodD0cOJBJLYDixtV3RsHw4y35JeYVSFSTTalbyYsr6QB1T06ejZ0S_-Z2Ctnhvze3dV9OgzBzOzltVr6')
 bot = Bot(TOKEN)
 dp = Dispatcher()
+
+# --- Глобальный словарь для хранения последних message_id по chat_id ---
+last_bot_messages = {}
+
+# --- Функции для работы с последними сообщениями ---
+
+async def save_last_message(chat_id: int, message_id: str):
+    """Сохраняет ID последнего сообщения бота для указанного чата"""
+    last_bot_messages[chat_id] = str(message_id)  # Обязательно в строку
+    logger.debug(f"Сохранен message_id {message_id} для чата {chat_id}")
+
+async def get_last_message_id(chat_id: int) -> str | None:
+    """Возвращает ID последнего сообщения бота для указанного чата"""
+    return last_bot_messages.get(chat_id)
+
+async def edit_last_message(bot_instance, chat_id: int, new_text: str, keyboard=None, parse_mode=None) -> bool:
+    """
+    Редактирует последнее сообщение бота в указанном чате
+    
+    Args:
+        bot_instance: Экземпляр бота
+        chat_id: ID чата
+        new_text: Новый текст сообщения (до 4000 символов)
+        keyboard: Новая клавиатура (опционально)
+        parse_mode: Режим форматирования текста (опционально)
+    
+    Returns:
+        bool: True если успешно, False если ошибка
+    """
+    try:
+        # Получаем ID последнего сообщения
+        message_id = await get_last_message_id(chat_id)
+        if not message_id:
+            logger.warning(f"Не найден message_id для редактирования в чате {chat_id}")
+            return False
+        
+        # Проверяем длину текста
+        if len(new_text) >= 4000:
+            logger.error(f"Текст слишком длинный ({len(new_text)} символов). Максимум 4000.")
+            return False
+        
+        # Подготавливаем attachments если есть клавиатура
+        attachments = [keyboard] if keyboard else None
+        
+        # Создаем экземпляр EditMessage
+        editor = EditMessage(
+            bot=bot_instance,
+            message_id=message_id,  # Уже в строковом формате
+            text=new_text,
+            attachments=attachments,
+            parse_mode=parse_mode
+        )
+        
+        # Выполняем редактирование
+        result = await editor.fetch()
+        
+        if isinstance(result, Error):
+            logger.error(f"Ошибка редактирования сообщения: {result}")
+            return False
+        else:
+            logger.info(f"Сообщение отредактировано в чате {chat_id}. Новый ID: {result.message_id}")
+            # Сохраняем новый message_id после редактирования
+            await save_last_message(chat_id, result.message_id)
+            return True
+            
+    except Exception as e:
+        logger.error(f"Исключение при редактировании сообщения: {e}")
+        return False
+
+# --- ОБНОВЛЕННЫЕ функции отправки сообщений ---
+
+async def send_main_menu(bot_instance, chat_id, text, keyboard=None):
+    """Отправляет основное меню и сохраняет message_id"""
+    try:
+        attachments = [keyboard] if keyboard else []
+        sent_message = await bot_instance.send_message(
+            chat_id=chat_id, 
+            text=text, 
+            attachments=attachments
+        )
+        
+        # Сохраняем message_id отправленного сообщения
+        await save_last_message(chat_id, sent_message.message_id)
+        
+        logger.info(f"Главное меню отправлено в чат {chat_id}, message_id: {sent_message.message_id}")
+        return sent_message
+    except Exception as e:
+        logger.error(f"Ошибка отправки главного меню: {e}")
+        try:
+            # Fallback без клавиатуры
+            sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
+            await save_last_message(chat_id, sent_message.message_id)
+            return sent_message
+        except Exception as fallback_e:
+            logger.error(f"Fallback тоже не сработал: {fallback_e}")
+
+async def send_temporary_message(bot_instance, chat_id, text):
+    """Отправляет временное сообщение и сохраняет message_id"""
+    try:
+        sent_message = await bot_instance.send_message(chat_id=chat_id, text=text)
+        await save_last_message(chat_id, sent_message.message_id)
+        return sent_message
+    except Exception as e:
+        logger.error(f"Ошибка отправки временного сообщения: {e}")
+
+async def send_keyboard_message(bot_instance, chat_id, text, keyboard):
+    """Отправляет сообщение с клавиатурой и сохраняет message_id"""
+    try:
+        sent_message = await bot_instance.send_message(
+            chat_id=chat_id, 
+            text=text, 
+            attachments=[keyboard]
+        )
+        await save_last_message(chat_id, sent_message.message_id)
+        return sent_message
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения с клавиатурой: {e}")
+
+# --- ОБНОВЛЕННЫЕ обработчики с поддержкой редактирования ---
+
+async def update_main_menu(bot_instance, chat_id, new_text, keyboard=None):
+    """
+    Обновляет главное меню через редактирование последнего сообщения
+    Если редактирование не удалось, отправляет новое сообщение
+    """
+    # Пытаемся отредактировать существующее сообщение
+    success = await edit_last_message(bot_instance, chat_id, new_text, keyboard)
+    
+    if not success:
+        # Если редактирование не удалось, отправляем новое сообщение
+        logger.info(f"Редактирование не удалось, отправляем новое сообщение в чат {chat_id}")
+        return await send_main_menu(bot_instance, chat_id, new_text, keyboard)
+    
+    return True
 
 # --- Текстовые шаблоны (ОБНОВЛЕНЫ ДЛЯ MAX МОЗГ) ---
 WELCOME_TEXT = """🧠 Добро пожаловать в MAX Мозг!
@@ -151,75 +287,6 @@ async def get_main_menu_keyboard(event, user_role="гость"):
     
     return builder.as_markup()
 
-async def send_main_menu(bot_instance, chat_id, text, keyboard=None):
-    """Отправляет основное меню - всегда одно сообщение с кнопками"""
-    try:
-        attachments = [keyboard] if keyboard else []
-        sent_message = await bot_instance.send_message(
-            chat_id=chat_id, 
-            text=text, 
-            attachments=attachments
-        )
-        logger.info(f"Главное меню отправлено в чат {chat_id}")
-        return sent_message
-    except Exception as e:
-        logger.error(f"Ошибка отправки главного меню: {e}")
-        try:
-            return await bot_instance.send_message(chat_id=chat_id, text=text)
-        except Exception as fallback_e:
-            logger.error(f"Fallback тоже не сработал: {fallback_e}")
-
-async def send_temporary_message(bot_instance, chat_id, text):
-    """Отправляет временное сообщение (исчезает после следующего действия)"""
-    try:
-        return await bot_instance.send_message(chat_id=chat_id, text=text)
-    except Exception as e:
-        logger.error(f"Ошибка отправки временного сообщения: {e}")
-
-async def send_keyboard_message(bot_instance, chat_id, text, keyboard):
-    """Отправляет сообщение с клавиатурой"""
-    try:
-        return await bot_instance.send_message(
-            chat_id=chat_id, 
-            text=text, 
-            attachments=[keyboard]
-        )
-    except Exception as e:
-        logger.error(f"Ошибка отправки сообщения с клавиатурой: {e}")
-
-# --- Функция для генерации QR-кода ---
-async def generate_qr_code(url):
-    """Генерирует QR-код для указанной ссылки"""
-    try:
-        import qrcode
-        from io import BytesIO
-        
-        # Создаем QR-код
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(url)
-        qr.make(fit=True)
-        
-        # Создаем изображение
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        # Сохраняем в bytes
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-        
-        return img_bytes
-    except ImportError:
-        logger.error("Библиотека qrcode не установлена. Установите: pip install qrcode[pil]")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка генерации QR-кода: {e}")
-        return None
-
 # --- Функция для генерации QR-кода ---
 async def generate_qr_code(url):
     """Генерирует QR-код для указанной ссылки"""
@@ -256,29 +323,22 @@ async def generate_qr_code(url):
 async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
     """Отправляет QR-код через MAX API"""
     try:
-        # --- ИМПОРТИРУЕМ InputMediaBuffer ---
         from maxapi.types.input_media import InputMediaBuffer
 
-        # --- СОЗДАЕМ InputMediaBuffer ---
-        # Передаем bytes, имя файла и тип
         buffer_obj = InputMediaBuffer(
-            buffer=qr_code_bytes.getvalue(), # передаем bytes
+            buffer=qr_code_bytes.getvalue(),
             filename="qr_code.png",
             type="image"
         )
 
-        # Загружаем файл
-        # Правильный вызов метода - передаем объект InputMediaBuffer
         upload_result = await bot_instance.upload_file_buffer(
-            buffer=buffer_obj, # <-- Передаем InputMediaBuffer
-            filename="qr_code.png", # Этот аргумент может быть не нужен внутри upload_file_buffer,
-                                   # если вся информация уже в InputMediaBuffer, но пусть будет для совместимости
-            type="image"  # Используем строку
+            buffer=buffer_obj,
+            filename="qr_code.png",
+            type="image"
         )
         
         logger.info(f"Файл загружен: {upload_result}")
         
-        # Отправляем сообщение
         await bot_instance.send_message(
             chat_id=chat_id,
             text=caption,
@@ -299,9 +359,9 @@ async def handle_role_pending_approval(event, role_name):
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     message = ROLE_APPROVAL_PENDING.format(role=role_display)
     
-    # Показываем главное меню с информацией о статусе
+    # Обновляем главное меню с информацией о статусе
     keyboard = await get_main_menu_keyboard(event, role_name)
-    await send_main_menu(event.bot, chat_id, message, keyboard)
+    await update_main_menu(event.bot, chat_id, message, keyboard)
 
 async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
     """Уведомляет администраторов о необходимости подтверждения роли"""
@@ -321,7 +381,7 @@ async def notify_admins_about_pending_role(event, user_id: int, role_name: str):
         except Exception as e:
             logger.warning(f"Не удалось уведомить администратора {admin_id}: {e}")
 
-# --- Обработчики событий (ОБНОВЛЕНЫ) ---
+# --- Обработчики событий (ОБНОВЛЕНЫ с поддержкой редактирования) ---
 async def handle_start_response(event, response_text=None):
     """Обрабатывает начальный ответ для MAX Мозг."""
     keyboard = await get_start_keyboard()
@@ -331,7 +391,7 @@ async def handle_start_response(event, response_text=None):
     if response_text is None:
         response_text = "🧠 Добро пожаловать в MAX Мозг! Нажмите кнопку для начала работы."
     
-    await send_main_menu(event.bot, chat_id, response_text, keyboard)
+    await update_main_menu(event.bot, chat_id, response_text, keyboard)
 
 async def handle_role_selection(event):
     """Обрабатывает выбор роли для MAX Мозг с проверкой блокировки"""
@@ -341,7 +401,7 @@ async def handle_role_selection(event):
     if user_id in ADMIN_IDS:
         keyboard = await get_role_selection_keyboard()
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-        await send_main_menu(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
+        await update_main_menu(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
         return
     
     # Для обычных пользователей проверяем возможность смены роли
@@ -354,13 +414,13 @@ async def handle_role_selection(event):
         keyboard = await get_main_menu_keyboard(event, user_role=current_role)
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         message = ROLE_CHANGE_BLOCKED.format(role=MAX_ROLES.get(current_role, current_role))
-        await send_main_menu(event.bot, chat_id, message, keyboard)
+        await update_main_menu(event.bot, chat_id, message, keyboard)
         return
     
     # Показываем выбор роли
     keyboard = await get_role_selection_keyboard()
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
-    await send_main_menu(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
+    await update_main_menu(event.bot, chat_id, ROLE_SELECTION_TEXT, keyboard)
 
 async def handle_role_approved(event, role_name):
     """Обрабатывает подтверждение выбора роли."""
@@ -372,17 +432,17 @@ async def handle_role_approved(event, role_name):
 
 Теперь вы можете использовать все возможности MAX Мозг."""
     
-    # Показываем главное меню
+    # Обновляем главное меню
     keyboard = await get_main_menu_keyboard(event, role_name)
-    await send_main_menu(event.bot, chat_id, approval_text, keyboard)
+    await update_main_menu(event.bot, chat_id, approval_text, keyboard)
 
 async def handle_role_rejected(event):
     """Обрабатывает ограниченный доступ."""
     chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
     
-    # Показываем главное меню
+    # Обновляем главное меню
     keyboard = await get_main_menu_keyboard(event, user_role="гость")
-    await send_main_menu(event.bot, chat_id, ROLE_REJECTED, keyboard)
+    await update_main_menu(event.bot, chat_id, ROLE_REJECTED, keyboard)
 
 # --- Словарь обработчиков команд (ОБНОВЛЕН) ---
 async def get_statistics_text():
@@ -486,7 +546,7 @@ async def handle_set_status(event, user_id: int, new_status: str):
         logger.error(f"Ошибка установки статуса: {e}")
         return f"❌ Не удалось установить статус: {e}"
 
-# --- Обработчики событий бота (ОБНОВЛЕНЫ) ---
+# --- Обработчики событий бота (ОБНОВЛЕНЫ с сохранением message_id) ---
 @dp.bot_started()
 async def bot_started(event: BotStarted):
     logger.info(f"MAX Мозг бот запущен. Chat ID: {event.chat_id}")
@@ -529,19 +589,19 @@ async def handle_message(event: MessageCreated):
         if feedback_text:
             logger.info(f"Отзыв от user_id {user_id}: {feedback_text}")
             await send_temporary_message(event.bot, event.message.recipient.chat_id, "✅ Спасибо за ваш отзыв!")
-        # После отзыва показываем главное меню
+        # После отзыва обновляем главное меню
         keyboard = await get_main_menu_keyboard(event)
-        await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+        await update_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
         return
     
     # Обработка команды "мойпрофиль"
     if text_lower in ['мойпрофиль', 'профиль', 'profile', 'мой профиль']:
         try:
             profile_text = await get_user_profile_text(user_id)
-            # Показываем профиль как временное сообщение, затем главное меню
+            # Показываем профиль как временное сообщение, затем обновляем главное меню
             await send_temporary_message(event.bot, event.message.recipient.chat_id, profile_text)
             keyboard = await get_main_menu_keyboard(event)
-            await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+            await update_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
         except Exception as e:
             logger.error(f"Ошибка получения профиля: {e}")
             await send_temporary_message(event.bot, event.message.recipient.chat_id, "❌ Ошибка при загрузке профиля")
@@ -570,10 +630,10 @@ async def handle_message(event: MessageCreated):
                 if command in ['роли', 'roles']:
                     await handle_role_selection(event)
                 else:
-                    # Для других команд показываем временное сообщение и главное меню
+                    # Для других команд показываем временное сообщение и обновляем главное меню
                     await send_temporary_message(event.bot, event.message.recipient.chat_id, response_text)
                     keyboard = await get_main_menu_keyboard(event)
-                    await send_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
+                    await update_main_menu(event.bot, event.message.recipient.chat_id, "Что вы хотите сделать дальше?", keyboard)
                 return
             except Exception as e:
                 logger.error(f"Ошибка обработки команды {command}: {e}")
@@ -648,7 +708,7 @@ async def handle_approve_role_command(event: MessageCreated):
             try:
                 role_display = MAX_ROLES.get(user_info.get('selected_role', 'пользователь'), 'Пользователь')
                 keyboard = await get_main_menu_keyboard(event, user_info.get('selected_role'))
-                await send_main_menu(
+                await update_main_menu(
                     event.bot, 
                     user_id,
                     f"✅ Ваша роль *{role_display}* подтверждена!\n\nТеперь вам доступен полный функционал MAX Мозг.",
@@ -789,16 +849,16 @@ async def handle_callback(event: MessageCallback):
                 f"👤 Ссылка на мой профиль в MAX:\n\n{MAX_PROFILE_URL}"
             )
         
-        # Показываем главное меню
+        # Обновляем главное меню
         keyboard = await get_main_menu_keyboard(event)
-        await send_main_menu(event.bot, chat_id, "Чем еще могу помочь?", keyboard)
+        await update_main_menu(event.bot, chat_id, "Чем еще могу помочь?", keyboard)
         return
     
     # Обработка возврата в главное меню
     if payload == "back_to_menu":
         chat_id = event.message.recipient.chat_id if hasattr(event, 'message') else event.chat_id
         keyboard = await get_main_menu_keyboard(event)
-        await send_keyboard_message(event.bot, chat_id, "Главное меню MAX Мозг:", keyboard)
+        await update_main_menu(event.bot, chat_id, "Главное меню MAX Мозг:", keyboard)
         return
     
     # Обработка открытия приложения (fallback)
