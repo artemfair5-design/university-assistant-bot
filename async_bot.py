@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import os
+import socket
 from datetime import datetime
 from maxapi import Bot, Dispatcher
 from maxapi.types import BotStarted, Command, MessageCreated, OpenAppButton, MessageCallback
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from maxapi.types.attachments.buttons.callback_button import CallbackButton
+import aiohttp
 
 # Импортируем нашу базу данных
 from database import db
@@ -88,7 +90,7 @@ MAX_ROLES = {
 ROLES_REQUIRING_APPROVAL = ["абитуриент", "студент", "работник", "администрация"]
 
 # Прямая ссылка на профиль в MAX
-MAX_PROFILE_URL = "https://max.ru/u/f9LHodD0cOKjtP4JqI_7NVijOYB4HbrU9UeT3xlr7m76Mmz7CEgQUmEQLzE"
+MAX_PROFILE_URL = "https://max.ru/u/f9LHodD0cOKjtP4JqI_7NVijOYB4HbrU9UeT3xlr7m76Mmz7CEgQUmEQLzE  "
 
 # --- Универсальные функции (ОБНОВЛЕНЫ) ---
 async def get_start_keyboard():
@@ -221,30 +223,36 @@ async def generate_qr_code(url):
 async def send_qr_code(bot_instance, chat_id, qr_code_bytes, caption="🧠 QR-код моего профиля в MAX"):
     """Отправляет QR-код через MAX API"""
     try:
-        # Пробуем разные варианты вызова upload_file_buffer
-        try:
-            # Вариант 1: передаем буфер как позиционный аргумент
-            upload_result = await bot_instance.upload_file_buffer(
-                qr_code_bytes.getvalue(),  # данные файла
-                "qr_code.png",             # имя файла
-                "image/png"                # тип файла
-            )
-        except TypeError as e:
-            # Вариант 2: если не сработал позиционный вызов
-            logger.warning(f"Позиционный вызов не сработал: {e}, пробуем именованные параметры")
-            upload_result = await bot_instance.upload_file_buffer(
-                file=qr_code_bytes.getvalue(),
-                filename="qr_code.png",
-                file_type="image/png"
-            )
+        # Получаем URL для загрузки
+        upload_url_data = await bot_instance.get_upload_url(
+            type="image"  # Пробуем строку вместо Enum
+        )
+        
+        logger.info(f"Получен URL для загрузки: {upload_url_data}")
+        
+        # Парсим URL из ответа
+        if hasattr(upload_url_data, 'url'):
+            upload_url = upload_url_data.url
+        elif isinstance(upload_url_data, dict) and 'url' in upload_url_data:
+            upload_url = upload_url_data['url']
+        else:
+            upload_url = str(upload_url_data)
+        
+        # Загружаем файл
+        # Правильный вызов метода - без аргумента 'file', передаем 'buffer' и 'filename'
+        upload_result = await bot_instance.upload_file_buffer(
+            buffer=qr_code_bytes.getvalue(),
+            filename="qr_code.png",
+            type="image"  # Используем строку
+        )
         
         logger.info(f"Файл загружен: {upload_result}")
         
-        # Отправляем сообщение с прикрепленным файлом
+        # Отправляем сообщение
         await bot_instance.send_message(
             chat_id=chat_id,
             text=caption,
-            attachments=[upload_result]  # Используем результат загрузки как вложение
+            attachments=[upload_result]
         )
         
         return True
@@ -765,7 +773,7 @@ async def handle_callback(event: MessageCallback):
     
     # Обработка открытия приложения (fallback)
     if payload == "open_max_app":
-        web_app_url = "https://artemfair5-design.github.io/university-assistant-bot/auth.html"
+        web_app_url = "  https://artemfair5-design.github.io/university-assistant-bot/auth.html  "
         await send_temporary_message(event.bot, event.message.recipient.chat_id, 
                           f"🧠 Открыть MAX Мозг: {web_app_url}")
         return
@@ -777,22 +785,99 @@ async def handle_callback(event: MessageCallback):
         await handle_role_pending_approval(event, current_role)
         return
 
+# --- Функции для стабильности (НОВЫЕ) ---
+
+async def check_platform_availability():
+    """Проверяет доступность хоста MAX API"""
+    try:
+        socket.getaddrinfo('platform-api.max.ru', 443)
+        return True
+    except socket.gaierror:
+        logger.error("Не удается разрешить host platform-api.max.ru")
+        return False
+
+async def health_check():
+    """Проверяет работоспособность сервисов"""
+    while True:
+        try:
+            # Проверка подключения к БД
+            await db.execute("SELECT 1")
+            
+            # Проверка доступности MAX API
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://platform-api.max.ru/health  ', timeout=10) as resp:
+                    if resp.status != 200:
+                        logger.warning("MAX API недоступен")
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+        
+        await asyncio.sleep(60)  # Проверка каждую минуту
+
+async def resilient_polling():
+    """Запуск polling с повторными попытками при ошибках"""
+    max_retries = 5
+    retry_delay = 30  # секунд
+    
+    for attempt in range(max_retries):
+        try:
+            # Проверяем доступность API перед запуском
+            if not await check_platform_availability():
+                logger.error("MAX API недоступен. Пропускаем запуск polling.")
+                if attempt < max_retries - 1:
+                    logger.info(f"Ожидание {retry_delay} секунд перед повторной проверкой...")
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error("MAX API недоступен. Завершение работы.")
+                    return
+            
+            await dp.start_polling(bot)
+            return  # Успешный запуск, выходим из цикла
+        except Exception as e:
+            logger.error(f"Ошибка polling (попытка {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Перезапуск через {retry_delay} секунд...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Достигнут лимит перезапусков. Завершение работы.")
+                raise
+
+async def graceful_shutdown():
+    """Корректное закрытие ресурсов"""
+    logger.info("Запуск корректного завершения работы...")
+    # Отменяем все активные задачи, кроме текущей
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    for task in tasks:
+        task.cancel()
+    
+    # Даем задачам время на завершение
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Закрываем соединение с базой данных
+    try:
+        await db.close()
+        logger.info("Соединение с базой данных закрыто.")
+    except Exception as e:
+        logger.error(f"Ошибка при закрытии базы данных: {e}")
+
 # --- Основная функция ---
 async def main():
     # Подключаемся к базе данных
-    max_retries = 5
-    for attempt in range(max_retries):
+    max_retries_db = 5
+    for attempt in range(max_retries_db):
         try:
             await db.connect()
+            logger.info("Подключение к базе данных успешно.")
             break
         except Exception as e:
-            logger.error(f"Попытка {attempt + 1}/{max_retries} подключения к БД не удалась: {e}")
-            if attempt < max_retries - 1:
+            logger.error(f"Попытка {attempt + 1}/{max_retries_db} подключения к БД не удалась: {e}")
+            if attempt < max_retries_db - 1:
                 wait_time = (attempt + 1) * 5
                 logger.info(f"Повторная попытка через {wait_time} секунд...")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error("Не удалось подключиться к базе данных после всех попыток")
+                logger.error("Не удалось подключиться к базе данных после всех попыток. Завершение.")
                 return
     
     try:
@@ -808,11 +893,7 @@ async def main():
         logger.warning(f"Не удалось удалить вебхуки: {e}")
     
     logger.info("Запуск бота MAX Мозг с long polling...")
-    await dp.start_polling(bot)
-
-async def shutdown():
-    """Корректное завершение работы"""
-    await db.close()
+    await resilient_polling()
 
 if __name__ == '__main__':
     try:
@@ -820,7 +901,13 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger.info("Бот MAX Мозг остановлен по запросу пользователя")
     except Exception as e:
-        logger.error(f"Ошибка при работе бота MAX Мозг: {e}")
+        logger.error(f"Критическая ошибка при работе бота MAX Мозг: {e}")
     finally:
         # Корректно закрываем соединения
-        asyncio.run(shutdown())
+        try:
+            asyncio.run(graceful_shutdown())
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                logger.warning("Event loop уже закрыт при попытке graceful_shutdown.")
+            else:
+                logger.error(f"Ошибка при завершении работы: {e}")
