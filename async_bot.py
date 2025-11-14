@@ -828,33 +828,35 @@ Username: @{username}
 COMMAND_HANDLERS = {
     'помощь': lambda: HELP_TEXT,
     'help': lambda: HELP_TEXT,
-    'статистика': get_statistics_text,
+    'статистика': get_statistics_text, # <-- Теперь функция определена
     'роли': lambda: "🔄 Нажмите на кнопку ниже, чтобы выбрать или сменить роль",
     'max': lambda: "🧠 MAX Мозг - интеллектуальная платформа для университета",
     'мозг': lambda: "🧠 MAX Мозг - интеллектуальная платформа для университета",
+    # Добавь другие команды сюда
 }
 
 async def get_statistics_text():
     """Генерирует текст статистики для MAX Мозг."""
     try:
+        # Предполагается, что db.get_user_stats() возвращает словарь
         stats = await db.get_user_stats()
-        status_stats_str = "\n".join([f"- {status}: {count}" for status, count in stats.get('status_stats', {}).items()])
-        role_stats_str = "\n".join([f"- {role}: {count}" for role, count in stats.get('role_stats', {}).items()])
+        status_text = "\n".join([f"- {status}: {count}" for status, count in stats.get('status_stats', {}).items()])
+        role_text = "\n".join([f"- {role}: {count}" for role, count in stats.get('role_stats', {}).items()])
 
         return f"""📊 Статистика MAX Мозг:
 
-Всего пользователей: {stats['total_users']}
-Сообщений в боте: {stats['total_messages']}
-Отзывов: {stats['total_feedback']}
-Активных за 7 дней: {stats['active_users_7d']}
-Подтвержденных ролей: {stats.get('approved_users', 0)}
-Доступов к платформе: {stats.get('mini_app_users', 0)}
+👥 Всего пользователей: {stats['total_users']}
+💬 Сообщений в боте: {stats['total_messages']}
+⭐ Отзывов: {stats['total_feedback']}
+🔥 Активных за 7 дней: {stats['active_users_7d']}
+✅ Подтвержденных ролей: {stats.get('approved_users', 0)}
+🧠 Доступов к платформе: {stats.get('mini_app_users', 0)}
 
-Распределение по статусам:
-{status_stats_str if status_stats_str else '- Нет данных'}
+🏷️ Распределение по статусам:
+{status_text if status_text else '  - Нет данных'}
 
-Распределение по ролям:
-{role_stats_str if role_stats_str else '- Нет данных'}"""
+🎯 Распределение по ролям:
+{role_text if role_text else '  - Нет данных'}"""
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
         return "❌ Не удалось получить статистику."
