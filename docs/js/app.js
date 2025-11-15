@@ -1,4 +1,4 @@
-const video = document.querySelector('.video-backgraund');
+const video = document.querySelector('.video-background');
 
 const swiperText = new Swiper('.swiper', {
   speed: 800, // Уменьшил с 1600 до 800
