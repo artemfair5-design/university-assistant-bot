@@ -81,10 +81,11 @@ button {
   height: 100%;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%) scale(1.1); 
-  object-fit: cover; 
+  transform: translate(-50%, -50%) scale(1.1); /* Небольшой zoom чтобы покрыть весь экран */
+  object-fit: cover; /* Важно! */
   opacity: .7;
   transition: opacity 0.5s ease-out;
+  /* Включаем аппаратное ускорение */
   transform: translate3d(-50%, -50%, 0) scale(1.1);
   will-change: transform, opacity;
 }
