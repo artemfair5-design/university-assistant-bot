@@ -13,9 +13,9 @@ const swiperText = new Swiper(`.swiper`, {
   }
 })
 swiperText.on(`slideChange`, function() {
-  gsap.to(video, 2, {
-    currentTime: (video.duration / this.slides.length - .1) * this.realIndex,
-    ease: Power2.easeOut
+  gsap.to(video, 4, {
+    currentTime: (video.duration / this.slides.length - .2) * this.realIndex,
+    ease: Power4.easeOut
   })
 })
 swiperText.on(`slideChangeTransitionStart`, function() {
