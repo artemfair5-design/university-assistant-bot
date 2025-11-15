@@ -1,7 +1,7 @@
 const video = document.querySelector('.video-backgraund');
 
 const swiperText = new Swiper('.swiper', {
-  speed: 800, // Уменьшил с 1600 до 800
+  speed: 800, 
   mousewheel: {},
   pagination: {
     el: '.swiper-pagination',
@@ -13,17 +13,17 @@ const swiperText = new Swiper('.swiper', {
   }
 });
 
-// Оптимизированная анимация
+
 swiperText.on('slideChange', function() {
-  gsap.killTweensOf(video); // Останавливаем предыдущие анимации
+  gsap.killTweensOf(video); 
   
   const targetTime = (video.duration / this.slides.length) * this.realIndex;
   
   gsap.to(video, {
-    duration: 1.5, // Уменьшил с 4 до 1.5 секунд
+    duration: 1.5, 
     currentTime: targetTime,
-    ease: "power2.out", // Более быстрая easing функция
-    overwrite: true // Перезаписывает предыдущие анимации
+    ease: "power2.out", 
+    overwrite: true 
   });
 });
 
